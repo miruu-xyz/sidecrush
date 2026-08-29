@@ -54,6 +54,12 @@ juce::Font hcFont (float pointHeight);
 void paintWell (juce::Graphics&, juce::Rectangle<float>, float corner,
                 juce::Colour centre, juce::Colour edge);
 
+// "HARDCAP by miruu", bottom-left of whichever panel is showing. The dim half is
+// #717f8f dodged in Figma, so its rendered value depends on what is behind it
+// and the caller says which panel it is on.
+void paintWordmark (juce::Graphics&, juce::Rectangle<float> panel,
+                    juce::Colour dim = hccolour::brandDim);
+
 //==============================================================================
 class HardCapLookAndFeel final : public juce::LookAndFeel_V4
 {
@@ -80,17 +86,45 @@ public:
 };
 
 //==============================================================================
+// juce::Slider has onDragStart and onDragEnd but nothing for hover, and the
+// scope has to know when the pointer is merely resting on a dial.
+class HoverSlider final : public juce::Slider
+{
+public:
+    void mouseEnter (const juce::MouseEvent& e) override
+    {
+        juce::Slider::mouseEnter (e);
+
+        if (onHover != nullptr)
+            onHover (true);
+    }
+
+    void mouseExit (const juce::MouseEvent& e) override
+    {
+        juce::Slider::mouseExit (e);
+
+        if (onHover != nullptr)
+            onHover (false);
+    }
+
+    std::function<void (bool)> onHover;
+};
+
+//==============================================================================
 // Everything the design calls "Generic Interactable": a 21px-tall well with
-// centred text that lights up cyan on hover. Two behaviours share it -- drag to
-// change a continuous or stepped value, or click to cycle a choice -- because
-// the design draws them identically and only the gesture differs.
+// centred text that lights up cyan on hover. Several behaviours share it --
+// drag a value, click to cycle a choice, click to open a menu -- because the
+// design draws them identically and only the gesture differs.
 class Pill final : public juce::Component
 {
 public:
     enum class Gesture { drag, cycle };
 
-    Pill (HardCapProcessor&, const char* paramId, Gesture,
-          juce::String dimPrefix = {});
+    Pill (HardCapProcessor&, const char* paramId, Gesture, juce::String dimPrefix = {});
+
+    // Not backed by a parameter. The UI scale is a preference, and putting it in
+    // the plug-in's automation list would be lying about what it is.
+    Pill (juce::String dimPrefix, Gesture);
 
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -99,50 +133,77 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
-    // Set by the editor for the slope pill, which the design blanks to OFF when
-    // the filter it belongs to is off.
+    // Replaces whatever the parameter would say -- the slope selector reading
+    // OFF, the scale switch having no parameter to ask.
     std::function<juce::String()> overrideText;
+
+    // Set to take over the click: the slope selector opens a menu instead of
+    // stepping blindly through eight values.
+    std::function<void()> onClick;
+
+    std::function<void (bool)> onHover;
+    std::function<void (bool)> onDragActive;
+
+    // Decided at mouse-down, because a pill can act on something other than the
+    // parameter it displays: with the filter off there are no slopes to choose
+    // between, so dragging the slope selector moves the filter instead.
+    std::function<juce::RangedAudioParameter*()> chooseDragTarget;
 
     void setOutlined (bool shouldOutline) { outlined = shouldOutline; }
 
     // CLIP is the only control that recolours itself when engaged. Left clear,
-    // a pill keeps the same look in both states, which is what the settings
-    // switches do.
+    // a pill keeps the same look in both states.
     juce::Colour onTint { 0x00000000 };
 
+    // CLIP when off and LQ both read as a legend rather than a live value, so
+    // the design drops their text to the caption tone.
+    bool dimWhenOff = false;
+
 private:
-    juce::RangedAudioParameter& param;
+    void drawLabel (juce::Graphics&, juce::String text, bool engaged, bool dormant);
+
+    juce::RangedAudioParameter* param = nullptr;
 
     // Not an APVTS::Listener: a host automating a parameter calls that straight
     // from the audio thread, and marshalling the repaint with
     // MessageManager::callAsync allocates a message every single time.
     // ParameterAttachment is an AsyncUpdater underneath, which allocates once.
-    juce::ParameterAttachment attachment;
+    std::unique_ptr<juce::ParameterAttachment> attachment;
 
     const Gesture gesture;
     const juce::String prefix;
 
     bool outlined = false; // CLIP draws a permanent border; the others do not
     bool hovered = false;
-    bool dragging = false;
+
+    juce::RangedAudioParameter* dragTarget = nullptr; // non-null while dragging
     float valueAtDragStart = 0.0f;
 };
 
 //==============================================================================
-// The word under the FILTER dial. Reads "FILTER" at rest, and swaps to a cyan
-// PRE / POST while the pointer is over it; clicking flips the two.
-class FilterLabel final : public juce::Component
+// The word under a dial. While that dial is being dragged the caption gives way
+// to its value, so the pointer's position always has a number attached to it.
+// FILTER additionally reads a cyan PRE / POST on hover and flips the two when
+// clicked, which is the design's "Variant2".
+class DialCaption final : public juce::Component
 {
 public:
-    explicit FilterLabel (HardCapProcessor&);
+    explicit DialCaption (juce::String captionText);
 
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
+    void setValueText (juce::String);
+    bool isShowingValue() const noexcept { return valueText.isNotEmpty(); }
+
+    std::function<juce::String()> hoverText; // drawn in accent, if set
+    std::function<void()> onClick;
+
 private:
-    HardCapProcessor& proc;
+    const juce::String caption;
+    juce::String valueText;
     bool hovered = false;
 };
 
@@ -186,29 +247,45 @@ private:
 
 //==============================================================================
 // Cyan filtered sidechain, the white output squashing against a grey aperture,
-// a red floor band and cyan lid bands. SPEC 5.1.
+// and the threshold bands. SPEC 5.1.
+//
+// The overlays are not decoration and are not all on at once: each one answers
+// the question the control being touched is asking, and hides whatever would
+// compete with the answer.
 class ScopeComponent final : public juce::Component
 {
 public:
+    enum class Overlay
+    {
+        traces,     // at rest: sidechain, lid and output, no thresholds
+        thresholds, // pointing at a threshold control, or at the scope itself
+        reference,  // dragging one: sidechain and lid only, so the bands have
+                    // something unambiguous to be read against
+        shape       // dragging SHAPE: the curve alone, no audio at all
+    };
+
     explicit ScopeComponent (HardCapProcessor&);
 
     void paint (juce::Graphics&) override;
     void refresh();
 
-    // The SHAPE dial asks the display to preview the curve it is about to
-    // apply, so the editor tells the scope when that dial is being touched.
-    void setShapePreview (bool shouldShow);
+    void setOverlay (Overlay);
+
+    void mouseEnter (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+
+    std::function<void (bool)> onHover;
 
 private:
     HardCapProcessor& processor;
     int64_t snapshotHead = 0;
-    bool shapePreview = false;
+    Overlay overlay = Overlay::traces;
 };
 
 //==============================================================================
-// The four routing switches. Figma has no popup for the gear; the settings are
-// drawn as a variant of the scope itself, so this takes the scope's place at
-// the same bounds rather than floating above it.
+// The routing switches. Figma has no popup for the gear; the settings are drawn
+// as a variant of the scope itself, so this takes the scope's place at the same
+// bounds rather than floating above it.
 class SettingsPanel final : public juce::Component
 {
 public:
@@ -216,6 +293,10 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+
+    // Wired by the editor. Sits apart from the routing switches because it
+    // changes nothing about the audio.
+    Pill scale;
 
 private:
     Pill link, hq, filterPos, source;
@@ -236,7 +317,6 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void mouseDown (const juce::MouseEvent&) override;
 
     // Both are also what tools/shot.cpp drives to render a state that would
     // otherwise need a mouse or a running message loop.
@@ -246,25 +326,34 @@ public:
 private:
     void timerCallback() override;
     void setScale (float);
+    void updateScopeOverlay();
+    void showSlopeMenu();
+    void applySlope (int index);
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 
-    void addSlider (juce::Slider&, juce::Slider::SliderStyle, const char* paramId,
+    void addSlider (HoverSlider&, juce::Slider::SliderStyle, const char* paramId,
                     juce::Colour pointer, bool withReadout,
                     std::unique_ptr<SliderAttachment>&);
 
     HardCapProcessor& proc;
     HardCapLookAndFeel lookAndFeel;
 
-    juce::Slider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
+    HoverSlider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
     std::unique_ptr<SliderAttachment> preAtt, outputAtt, ceilingAtt, filterAtt, shapeAtt;
 
     Pill slopePill, floorPill, clipPill;
-    FilterLabel filterLabel;
+    DialCaption filterCaption, shapeCaption;
     IconButton gear, close;
     ActivityLed led;
     ScopeComponent scope;
     SettingsPanel settings;
+
+    // Which controls are currently claiming the display. Kept as flags rather
+    // than queried from the mouse so the headless renderer can set them.
+    bool thresholdHover = false;
+    bool thresholdDrag = false;
+    bool shapeDrag = false;
 
     float scaleFactor = 1.0f;
 

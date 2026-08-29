@@ -13,6 +13,32 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     const auto db = [] (float v, int) { return String (v, 1) + " dB"; };
 
+    // CEILING and FLOOR are quoted in dB but the scope plots linear amplitude,
+    // and a dB-linear dial puts almost everything in the top of the sweep: on a
+    // -60..0 range, half amplitude (-6 dB) sits 90 % of the way round, so the
+    // whole lower half of the travel is inaudible fractions. Tapering the dial
+    // to amplitude instead makes the pointer and the band it controls move
+    // together, which is what "feels linear" means here. -100 rather than the
+    // range's own floor is the conversions' minus-infinity, so that the bottom
+    // detent round-trips instead of collapsing to zero.
+    const auto amplitudeTaper = [] (float minDb)
+    {
+        return NormalisableRange<float> { minDb, 0.0f,
+            [] (float lo, float, float norm)
+            {
+                return norm <= 0.0f ? lo : jmax (lo, Decibels::gainToDecibels (norm, -100.0f));
+            },
+            [] (float lo, float, float value)
+            {
+                return value <= lo ? 0.0f
+                                   : jlimit (0.0f, 1.0f, Decibels::decibelsToGain (value, -100.0f));
+            },
+            [] (float lo, float hi, float value)
+            {
+                return jlimit (lo, hi, std::round (value * 10.0f) / 10.0f);
+            } };
+    };
+
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::pre, 1 }, "Pre",
         NormalisableRange<float> { -36.0f, 36.0f, 0.1f }, 0.0f,
@@ -20,14 +46,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::ceiling, 1 }, "Ceiling",
-        NormalisableRange<float> { -60.0f, 0.0f, 0.1f }, -6.0f,
+        amplitudeTaper (-60.0f), -6.0f,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (db)));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::floorDb, 1 }, "Floor",
-        NormalisableRange<float> { floorOffDb, 0.0f, 0.1f }, floorOffDb,
+        amplitudeTaper (floorOffDb), floorOffDb,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (
-            [] (float v, int) { return v <= floorOffDb ? String ("OFF") : String (v, 1) + " dB"; })));
+            // Not "OFF": the floor being at the bottom means the lid starts
+            // moving the instant the sidechain does, and reading OFF next to a
+            // SHAPE dial invites the reading that the shaping is disabled.
+            [] (float v, int) { return v <= floorOffDb ? String ("INSTANT") : String (v, 1) + " dB"; })));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::shape, 1 }, "Shape",

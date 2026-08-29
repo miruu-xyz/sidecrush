@@ -70,7 +70,7 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 |---|---|---|---|---|
 | PRE | float, dB | −36 … +36 | 0 | carrier drive into the lid |
 | CEILING | float, dBFS | −60 … 0 | −6 | sidechain level at which the lid fully closes |
-| FLOOR | float, dBFS | OFF … 0 | OFF | absolute; displays "OFF" at minimum |
+| FLOOR | float, dBFS | −60 … 0 | −60 | absolute; displays "INSTANT" at minimum |
 | SHAPE | float | −1.00 … +1.00 | 0.00 | bipolar, centre detent |
 | FILTER | float, Hz | 20 … 20000, then OFF | OFF | logarithmic; OFF is the top detent |
 | SLOPE | choice | 6/12/18/24/30/36/42/48 dB/oct | 12 | 1–8 poles, snapped |
@@ -83,6 +83,8 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 
 Notes:
 
+- **CEILING and FLOOR are tapered to amplitude, not to dB.** Both are quoted in dB, but a dial that is linear in dB puts almost everything in the top of its sweep: on a −60 … 0 range, half amplitude (−6 dB) sits 90 % of the way round, and the bottom half of the travel is inaudible fractions. Because the scope plots linear amplitude, the dial and the band it controls would move at visibly different rates. The normalisable range therefore maps dial position to linear gain, so the pointer and the threshold track each other. −100 dB is the conversions' minus-infinity so the bottom detent round-trips instead of collapsing to zero.
+- **FLOOR at minimum reads INSTANT, not OFF.** Nothing is switched off there — the lid starts moving the moment the sidechain does. Reading "OFF" next to a SHAPE dial invites the reading that the shaping is disabled.
 - **FLOOR is absolute, not relative to CEILING** — sweeping CEILING does not drag FLOOR with it. FLOOR is internally clamped to `min(floor, ceiling - 1 dB)` so the window can never invert. The preview shows the effective window, so the clamp is visible rather than silent.
 - **PRE and OUTPUT share a range** so the pair is not confusing to read.
 - **CEILING turns conventionally**: clockwise = higher dBFS = gentler. Counter-clockwise lowers the ceiling.
@@ -171,8 +173,10 @@ Panel layout is defined in Figma and the file is the source of truth:
 https://www.figma.com/design/Hc5nzirm4UIGqWrgbs5Uy2/Miruu-Plugin-Collection?node-id=1-11
 
 The canvas is **968 x 326** and the editor is laid out against those coordinates
-exactly. It does not reflow: the whole editor carries an affine scale and the
-right-click menu offers 75 / 100 / 125 / 150 %, stored in the plug-in state.
+exactly. It does not reflow: the whole editor carries an affine scale of 75 /
+100 / 125 / 150 %, stored in the plug-in state. The switch lives in the settings
+panel rather than on a background right-click, because a menu that only exists
+where nothing is drawn is a menu nobody finds.
 
 Typeface is Zalando Sans Expanded (OFL), embedded from `Resources/fonts/`. Figma
 sizes are em sizes, so they are applied with `withPointHeight`, not `withHeight`.
@@ -186,7 +190,10 @@ than copied from the layer list — #b1b1b1 dodged over the #101419 background i
 Controls: PRE fader, CEILING dial (large), FILTER dial, SHAPE dial, SLOPE pill,
 FLOOR pill, OUT fader, a CLIP toggle in the scope's lower-right corner, and a
 gear in the upper-right that swaps the scope for a settings panel carrying
-STEREO / HQ / FILTER PRE / SIGNAL EXT.
+STEREO / HQ / FILTER PRE / SIGNAL EXT, and SCALE below them.
+
+SCALE sits apart from the other four: it is a UI preference, not a plug-in
+parameter, so it is deliberately absent from the host's automation list.
 
 The settings panel is a **swap, not an overlay** — it takes the scope's exact
 bounds, which is how Figma draws it (Oscilloscope variant "Variant3"). There is
@@ -197,8 +204,8 @@ no designed popup anywhere in the file.
 | element | colour | meaning |
 |---|---|---|
 | sidechain | cyan line | filtered sidechain, post-filter, pre-rectifier — the signal the thresholds measure |
-| ±CEILING | cyan gradient bands | fill from each edge inward to the threshold; the clamped region |
-| ±FLOOR | red band | symmetric around the centre; collapses to nothing when FLOOR is OFF |
+| ±CEILING | cyan gradient bands | fill from each edge inward to the threshold; the clamped region. Shown on demand — see 5.3 |
+| ±FLOOR | red band | symmetric around the centre; collapses to nothing at INSTANT. Shown on demand — see 5.3 |
 | lid | grey line pair | ±lid, the aperture the carrier is squashed against |
 | output | white line | slams flat against the aperture as it closes |
 
@@ -224,9 +231,15 @@ so the window auto-scales to ~2 cycles regardless of the sub's pitch. Without
 this a 40 Hz sub and a 100 Hz sub look wildly different.
 
 **Sampling:** two cycles of a 40 Hz sub is ~2400 samples across 380 pixels, so
-each pixel column is drawn as the min/max of the samples inside it, joined to its
-neighbour. A polyline through every sixth sample misses the peaks, and which
-samples it lands on shifts frame to frame, so the carrier appears to crawl.
+each pixel column is drawn as the min/max of the samples inside it. A polyline
+through every sixth sample misses the peaks, and which samples it lands on shifts
+frame to frame, so the carrier appears to crawl.
+
+Each extreme is placed at the x of the sample it came from, not at the column's
+centre, and the whole trace is one continuous path. Snapping to columns turns
+every diagonal into a staircase — which is most of what a slow sidechain is made
+of — and separate subpaths get their own end caps, which doubles the line weight
+wherever columns meet and leaves the trace visibly heavier in dense passages.
 
 **Channel:** left only.
 **Repaint:** 30 fps from a lock-free FIFO. The FIFO is still filled at base rate;
@@ -235,22 +248,58 @@ editor is open whether or not the host is playing.
 
 ### 5.2 Interaction states
 
-Taken from the Figma component variants, not invented:
+Taken from the Figma component variants where they exist, and from the principle
+that a control should explain itself where they do not.
 
 - **Generic Interactable** — a pill gains a cyan border and a soft cyan glow while
-  hovered or dragged. Applies to SLOPE, FLOOR, CLIP and the settings switches.
+  hovered or dragged. Applies to SLOPE, FLOOR, CLIP, the settings switches and SCALE.
 - **CLIP** — engaged, it tints its own well red, borders in #e73131 and hangs a
   wide red glow. Off, it keeps a hairline border and drops its text to the
-  section-caption tone rather than full white.
+  section-caption tone rather than full white. **LQ** is dimmed the same way
+  against **HQ**, so the pair reads as one switch rather than two labels.
 - **FILTER** — the word under the dial reads "FILTER" at rest and swaps to a cyan
   PRE / POST while hovered. Clicking it flips the two.
-- **SHAPE** — while the dial is being dragged, the scope overlays the ramp the
-  current exponent would apply.
+- **FILTER and SHAPE captions** — while their dial is being dragged, the caption
+  is replaced by the dial's current value in the readout colour. Those two dials
+  are the only ones with no readout of their own, so without this they are the
+  only controls you cannot see the value of while setting it.
 - **FILTER dial** — its pointer goes flat grey at the OFF detent, and the SLOPE
   pill reads OFF with it. It is the only dial that does this.
-- **SLOPE / FLOOR** — draggable; 150 px of travel covers the whole range.
+- **SLOPE** — draggable, and clicking it opens the eight choices as a menu rather
+  than stepping blindly through them. With the filter switched off there are no
+  slopes to choose between, so dragging sweeps the **filter's cutoff** instead of
+  doing nothing visible, and picking a slope from the menu brings the filter in
+  at **160 Hz**. A control that is inert in a reachable state reads as broken.
 - the dot beside CEILING is a **lid-activity LED**: brightness tracks
   instantaneous gain reduction.
+
+### 5.3 What the scope shows, and when
+
+The overlays are not decoration and are never all on at once. Each answers the
+question the control being touched is asking, and hides whatever would compete
+with the answer.
+
+| state | shown |
+|---|---|
+| at rest | sidechain, lid and output |
+| pointing at CEILING, FLOOR or the scope | ... plus the ceiling and floor bands |
+| dragging CEILING or FLOOR | bands, sidechain and lid — **no output** |
+| dragging SHAPE | the SHAPE curve alone; no audio, no bands |
+
+Dropping the output while a threshold is moving is the point of the reference
+state: setting a threshold is a question about where the *sidechain* sits against
+the bands, and the output crosses the same ground answering a different one.
+
+The SHAPE curve replaces the scope rather than overlaying it, because a transfer
+curve and a waveform share an axis and mean different things by it. It is drawn
+**mirrored about the centre line** for the same reason — the display it stands in
+for is bipolar, and a one-sided curve in that frame reads as a signal sitting
+off-centre rather than as an aperture.
+
+The drawn floor is put through the engine's own `clampFloor`, so the band cannot
+be shown above the ceiling when the audio would not allow it. The clamp constant
+lives in `HardCapEngine.h` and is used by both; two copies would drift apart and
+the symptom would be a band that does not sit where the floor is.
 
 ---
 

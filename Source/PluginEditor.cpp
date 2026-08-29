@@ -40,6 +40,22 @@ void paintWell (juce::Graphics& g, juce::Rectangle<float> r, float corner,
     g.restoreState();
 }
 
+void paintWordmark (juce::Graphics& g, juce::Rectangle<float> panel, juce::Colour dim)
+{
+    const auto font = hcFont (12.0f);
+    // Figma puts the wordmark's baseline 10px above the panel's bottom edge.
+    const auto area = panel.reduced (10.0f).translated (0.0f, 3.0f);
+
+    g.setFont (font);
+    g.setColour (hccolour::brand);
+    g.drawText ("HARDCAP", area, juce::Justification::bottomLeft);
+
+    g.setColour (dim);
+    g.drawText ("by miruu",
+                area.withTrimmedLeft (juce::GlyphArrangement::getStringWidth (font, "HARDCAP ")),
+                juce::Justification::bottomLeft);
+}
+
 //==============================================================================
 HardCapLookAndFeel::HardCapLookAndFeel()
 {
@@ -163,17 +179,23 @@ void HardCapLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int 
 
 //==============================================================================
 Pill::Pill (HardCapProcessor& p, const char* paramId, Gesture g, juce::String dimPrefix)
-    : param (*p.apvts.getParameter (paramId)),
-      attachment (param, [this] (float) { repaint(); }),
-      gesture (g), prefix (std::move (dimPrefix))
+    : param (p.apvts.getParameter (paramId)), gesture (g), prefix (std::move (dimPrefix))
 {
     setComponentID (paramId);
+    attachment = std::make_unique<juce::ParameterAttachment> (*param, [this] (float) { repaint(); });
+}
+
+Pill::Pill (juce::String dimPrefix, Gesture g)
+    : gesture (g), prefix (std::move (dimPrefix))
+{
 }
 
 void Pill::paint (juce::Graphics& g)
 {
     const auto r = getLocalBounds().toFloat().reduced (0.5f);
-    const auto engaged = onTint.isOpaque() && param.getValue() > 0.5f;
+    const auto on = param != nullptr && param->getValue() > 0.5f;
+    const auto engaged = on && onTint.isOpaque();
+    const auto dormant = dimWhenOff && ! on;
 
     if (engaged)
     {
@@ -183,8 +205,7 @@ void Pill::paint (juce::Graphics& g)
         shape.addRoundedRectangle (r, 4.0f);
         juce::DropShadow { onTint.withAlpha (0.30f), 24, {} }.drawForPath (g, shape);
 
-        paintWell (g, r, 4.0f, juce::Colour { 0xff740000 }.withAlpha (0.55f),
-                   hccolour::wellEdge);
+        paintWell (g, r, 4.0f, juce::Colour { 0xff740000 }.withAlpha (0.55f), hccolour::wellEdge);
     }
     else
     {
@@ -209,21 +230,28 @@ void Pill::paint (juce::Graphics& g)
         g.drawRoundedRectangle (r, 4.0f, 1.0f);
     }
 
-    const auto text = overrideText ? overrideText() : param.getCurrentValueAsText();
+    drawLabel (g, overrideText != nullptr ? overrideText()
+                                          : param != nullptr ? param->getCurrentValueAsText()
+                                                             : juce::String(),
+               engaged, dormant);
+}
 
-    g.setFont (hcFont (12.0f));
+void Pill::drawLabel (juce::Graphics& g, juce::String text, bool engaged, bool dormant)
+{
+    const auto font = hcFont (12.0f);
+    g.setFont (font);
 
-    const auto dormant = outlined && ! engaged;
+    const auto bright = engaged ? hccolour::clipOn : dormant ? hccolour::label : hccolour::value;
 
     if (prefix.isEmpty())
     {
-        g.setColour (engaged ? hccolour::clipOn : dormant ? hccolour::label : hccolour::value);
+        g.setColour (bright);
         g.drawText (text, getLocalBounds(), juce::Justification::centred);
         return;
     }
 
-    // "FILTER PRE" and "SIGNAL EXT": the name stays dim, the value does not.
-    const auto font = hcFont (12.0f);
+    // "FILTER PRE", "SIGNAL EXT", "SCALE 100%": the name stays dim, the value
+    // does not.
     const auto gap = juce::GlyphArrangement::getStringWidth (font, " ");
     const auto prefixWidth = juce::GlyphArrangement::getStringWidth (font, prefix);
     const auto total = prefixWidth + gap + juce::GlyphArrangement::getStringWidth (font, text);
@@ -233,85 +261,139 @@ void Pill::paint (juce::Graphics& g)
     g.drawText (prefix, juce::Rectangle<float> { left, 0.0f, prefixWidth, (float) getHeight() },
                 juce::Justification::centredLeft);
 
-    g.setColour (hccolour::value);
+    g.setColour (bright);
     g.drawText (text, juce::Rectangle<float> { left + prefixWidth + gap, 0.0f,
                                                total - prefixWidth - gap, (float) getHeight() },
                 juce::Justification::centredLeft);
 }
 
-void Pill::mouseEnter (const juce::MouseEvent&) { hovered = true;  repaint(); }
-void Pill::mouseExit  (const juce::MouseEvent&) { hovered = false; repaint(); }
+void Pill::mouseEnter (const juce::MouseEvent&)
+{
+    hovered = true;
+    repaint();
+
+    if (onHover != nullptr)
+        onHover (true);
+}
+
+void Pill::mouseExit (const juce::MouseEvent&)
+{
+    hovered = false;
+    repaint();
+
+    if (onHover != nullptr)
+        onHover (false);
+}
 
 void Pill::mouseDown (const juce::MouseEvent&)
 {
     if (gesture != Gesture::drag)
         return;
 
-    dragging = true;
-    valueAtDragStart = param.getValue();
-    attachment.beginGesture();
+    dragTarget = chooseDragTarget != nullptr ? chooseDragTarget() : param;
+
+    if (dragTarget == nullptr)
+        return;
+
+    // Raw gesture calls rather than the attachment: the attachment is bound to
+    // the parameter this pill *displays*, and the one it drags is chosen here.
+    // This is the message thread, so there is nothing to marshal.
+    valueAtDragStart = dragTarget->getValue();
+    dragTarget->beginChangeGesture();
+
+    if (onDragActive != nullptr)
+        onDragActive (true);
 }
 
 void Pill::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! dragging)
+    if (dragTarget == nullptr)
         return;
 
     // 150px of travel covers the whole range, which is enough resolution for
     // eight slope steps and fine enough for the floor's 0.1 dB interval.
     const auto moved = valueAtDragStart - (float) e.getDistanceFromDragStartY() / 150.0f;
-    attachment.setValueAsPartOfGesture (param.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, moved)));
+    dragTarget->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, moved));
+    repaint();
 }
 
 void Pill::mouseUp (const juce::MouseEvent& e)
 {
-    if (dragging)
+    if (dragTarget != nullptr)
     {
-        dragging = false;
-        attachment.endGesture();
-        return;
+        dragTarget->endChangeGesture();
+        dragTarget = nullptr;
+
+        if (onDragActive != nullptr)
+            onDragActive (false);
     }
 
-    if (gesture != Gesture::cycle || ! e.mouseWasClicked())
-        return;
-
-    const auto steps = juce::jmax (2, param.getNumSteps());
-    const auto current = juce::roundToInt (param.getValue() * (float) (steps - 1));
-    const auto next = (float) ((current + 1) % steps) / (float) (steps - 1);
-
-    attachment.setValueAsCompleteGesture (param.convertFrom0to1 (next));
-}
-
-//==============================================================================
-FilterLabel::FilterLabel (HardCapProcessor& p) : proc (p)
-{
-    setComponentID ("filterlabel");
-}
-
-void FilterLabel::paint (juce::Graphics& g)
-{
-    auto& param = *proc.apvts.getParameter (ids::filterPos);
-
-    g.setFont (hcFont (12.0f));
-    g.setColour (hovered ? hccolour::accent : hccolour::label);
-    g.drawText (hovered ? param.getCurrentValueAsText() : "FILTER",
-                getLocalBounds(), juce::Justification::centred);
-}
-
-void FilterLabel::mouseEnter (const juce::MouseEvent&) { hovered = true;  repaint(); }
-void FilterLabel::mouseExit  (const juce::MouseEvent&) { hovered = false; repaint(); }
-
-void FilterLabel::mouseUp (const juce::MouseEvent& e)
-{
+    // A click is a press and release that moved nothing, so it can still mean
+    // something on a pill that also drags -- that is how the slope selector both
+    // sweeps the filter and opens its menu.
     if (! e.mouseWasClicked())
         return;
 
-    auto& param = *proc.apvts.getParameter (ids::filterPos);
+    if (onClick != nullptr)
+    {
+        onClick();
+        return;
+    }
 
-    param.beginChangeGesture();
-    param.setValueNotifyingHost (param.getValue() > 0.5f ? 0.0f : 1.0f);
-    param.endChangeGesture();
+    if (gesture != Gesture::cycle || param == nullptr)
+        return;
+
+    const auto steps = juce::jmax (2, param->getNumSteps());
+    const auto current = juce::roundToInt (param->getValue() * (float) (steps - 1));
+    const auto next = (float) ((current + 1) % steps) / (float) (steps - 1);
+
+    attachment->setValueAsCompleteGesture (param->convertFrom0to1 (next));
+}
+
+//==============================================================================
+DialCaption::DialCaption (juce::String captionText) : caption (std::move (captionText))
+{
+    setComponentID (caption.toLowerCase());
+}
+
+void DialCaption::paint (juce::Graphics& g)
+{
+    g.setFont (hcFont (12.0f));
+
+    // Dragging wins over hovering: if the dial is moving, its number is the only
+    // thing worth saying.
+    if (valueText.isNotEmpty())
+    {
+        g.setColour (hccolour::value);
+        g.drawText (valueText, getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
+    const auto showHover = hovered && hoverText != nullptr;
+
+    g.setColour (showHover ? hccolour::accent : hccolour::label);
+    g.drawText (showHover ? hoverText() : caption, getLocalBounds(), juce::Justification::centred);
+}
+
+void DialCaption::setValueText (juce::String text)
+{
+    if (valueText == text)
+        return;
+
+    valueText = std::move (text);
     repaint();
+}
+
+void DialCaption::mouseEnter (const juce::MouseEvent&) { hovered = true;  repaint(); }
+void DialCaption::mouseExit  (const juce::MouseEvent&) { hovered = false; repaint(); }
+
+void DialCaption::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && onClick != nullptr)
+    {
+        onClick();
+        repaint();
+    }
 }
 
 //==============================================================================
@@ -382,7 +464,10 @@ void ActivityLed::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p) {}
+ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p)
+{
+    setComponentID ("scope");
+}
 
 void ScopeComponent::refresh()
 {
@@ -390,13 +475,25 @@ void ScopeComponent::refresh()
     repaint();
 }
 
-void ScopeComponent::setShapePreview (bool shouldShow)
+void ScopeComponent::setOverlay (Overlay wanted)
 {
-    if (shapePreview == shouldShow)
+    if (overlay == wanted)
         return;
 
-    shapePreview = shouldShow;
+    overlay = wanted;
     repaint();
+}
+
+void ScopeComponent::mouseEnter (const juce::MouseEvent&)
+{
+    if (onHover != nullptr)
+        onHover (true);
+}
+
+void ScopeComponent::mouseExit (const juce::MouseEvent&)
+{
+    if (onHover != nullptr)
+        onHover (false);
 }
 
 void ScopeComponent::paint (juce::Graphics& g)
@@ -415,55 +512,88 @@ void ScopeComponent::paint (juce::Graphics& g)
     const auto amp = bounds.getHeight() * 0.5f - 10.0f;
     const auto toY = [&] (float v) { return mid - juce::jlimit (-1.2f, 1.2f, v) * amp; };
 
-    // ---- ceiling and floor, as the bands from the "Threshold lines" variant --
-    // Derived here rather than mirrored out of the engine: the engine only
-    // refreshes its copy inside processBlock, so in a stopped host the bands
-    // would sit at their defaults until playback started. This is the same
-    // arithmetic pullParameters does.
-    const auto floorDb = processor.apvts.getRawParameterValue (ids::floorDb)->load();
-    const auto ceilingLin = juce::Decibels::decibelsToGain (
-        processor.apvts.getRawParameterValue (ids::ceiling)->load());
-    const auto floorLin = floorDb <= floorOffDb ? 0.0f
-                                               : juce::Decibels::decibelsToGain (floorDb);
-
-    // Figma's layer order matters here and is not the obvious one: the zero line
-    // and the red floor band go *under* the traces, and the cyan lid bands go
-    // over the top of them. Drawing the lid bands first instead loses the tint
-    // where a trace crosses into the clamped region, which is the one place the
-    // overlay is actually telling you something.
-
+    // The centre line is the axis everything else is read against, including the
+    // SHAPE curve's mirror, so it is the one thing drawn in every mode.
     // Snapped to a whole row: at 1x a half-pixel line is drawn as two rows at
     // half strength, which reads as a smudge rather than the design's hairline.
     g.setColour (hccolour::scopeLine);
     g.fillRect (bounds.getX(), std::floor (mid) - 1.0f, bounds.getWidth(), 1.0f);
 
-    if (floorLin > 0.0f)
+    if (overlay == Overlay::shape)
     {
-        g.setColour (hccolour::clipOn.withAlpha (0.2f));
-        g.fillRect (bounds.getX(), toY (floorLin), bounds.getWidth(), toY (-floorLin) - toY (floorLin));
-    }
+        // SHAPE is a transfer curve, not a waveform: x is how far the detector
+        // has crossed the window, y is the aperture that leaves. Drawn mirrored
+        // because the scope it replaces is bipolar, and a one-sided curve in the
+        // same frame reads as a signal sitting off-centre.
+        const auto exponent = std::pow (2.0f, -4.0f * processor.apvts.getRawParameterValue (ids::shape)->load());
 
-    // ---- the SHAPE dial's preview, drawn whether or not audio is running -----
-    if (shapePreview)
-    {
-        const auto shape = processor.apvts.getRawParameterValue (ids::shape)->load();
-        const auto exponent = std::pow (2.0f, -4.0f * shape);
+        juce::Path upper, lower, fill;
 
-        juce::Path up, down;
-
-        for (int i = 0; i <= 96; ++i)
+        for (int i = 0; i <= 160; ++i)
         {
-            const auto t = (float) i / 96.0f;
+            const auto t = (float) i / 160.0f;
             const auto lid = 1.0f - std::pow (t, exponent);
             const auto px = bounds.getX() + t * bounds.getWidth();
 
-            i == 0 ? up.startNewSubPath (px, toY (lid)) : up.lineTo (px, toY (lid));
-            i == 0 ? down.startNewSubPath (px, toY (-lid)) : down.lineTo (px, toY (-lid));
+            if (i == 0)
+            {
+                upper.startNewSubPath (px, toY (lid));
+                lower.startNewSubPath (px, toY (-lid));
+                fill.startNewSubPath (px, toY (lid));
+            }
+            else
+            {
+                upper.lineTo (px, toY (lid));
+                lower.lineTo (px, toY (-lid));
+                fill.lineTo (px, toY (lid));
+            }
         }
 
-        g.setColour (hccolour::accent.withAlpha (0.45f));
-        g.strokePath (up, juce::PathStrokeType (1.2f));
-        g.strokePath (down, juce::PathStrokeType (1.2f));
+        for (int i = 160; i >= 0; --i)
+        {
+            const auto t = (float) i / 160.0f;
+            fill.lineTo (bounds.getX() + t * bounds.getWidth(), toY (-(1.0f - std::pow (t, exponent))));
+        }
+
+        fill.closeSubPath();
+
+        g.setColour (hccolour::accent.withAlpha (0.10f));
+        g.fillPath (fill);
+
+        g.setColour (hccolour::accent);
+        g.strokePath (upper, juce::PathStrokeType (1.8f));
+        g.strokePath (lower, juce::PathStrokeType (1.8f));
+
+        g.restoreState();
+        paintWordmark (g, bounds);
+        return;
+    }
+
+    // ---- ceiling and floor, as the bands from the "Threshold lines" variant --
+    // Derived here rather than mirrored out of the engine: the engine only
+    // refreshes its copy inside processBlock, so in a stopped host the bands
+    // would sit at their defaults until playback started. Run through the
+    // engine's own clamp so the drawn floor cannot climb above the drawn
+    // ceiling -- the audio refuses to let the window invert, and a picture that
+    // showed otherwise would be lying about what the controls did.
+    const auto ceilingLin = juce::Decibels::decibelsToGain (
+        processor.apvts.getRawParameterValue (ids::ceiling)->load());
+    const auto requestedFloorDb = processor.apvts.getRawParameterValue (ids::floorDb)->load();
+    const auto floorLin = hardcap::Engine::clampFloor (
+        requestedFloorDb <= floorOffDb ? 0.0f : juce::Decibels::decibelsToGain (requestedFloorDb),
+        ceilingLin);
+
+    const auto showBands = overlay == Overlay::thresholds || overlay == Overlay::reference;
+
+    // Figma's layer order matters here and is not the obvious one: the floor
+    // band goes *under* the traces and the lid bands go over the top of them.
+    // Drawing the lid bands first instead loses the tint where a trace crosses
+    // into the clamped region, which is the one place the overlay is telling you
+    // something.
+    if (showBands && floorLin > 0.0f)
+    {
+        g.setColour (hccolour::clipOn.withAlpha (0.2f));
+        g.fillRect (bounds.getX(), toY (floorLin), bounds.getWidth(), toY (-floorLin) - toY (floorLin));
     }
 
     // ---- traces -------------------------------------------------------------
@@ -518,15 +648,23 @@ void ScopeComponent::paint (juce::Graphics& g)
             // polyline through every sixth sample is what actually gets drawn --
             // it misses the peaks, and which samples it lands on shifts frame to
             // frame, so the carrier crawls. Each column is drawn as the range of
-            // the samples inside it instead, joined to its neighbour so the
-            // result reads as one continuous trace.
+            // the samples inside it instead.
+            //
+            // One continuous path per trace, not a segment per column: separate
+            // subpaths get their own end caps, which doubles up wherever columns
+            // meet and leaves the line visibly heavier in dense passages than in
+            // quiet ones.
             const auto columns = juce::jmax (1, (int) bounds.getWidth());
 
             const auto drawTrace = [&] (auto value, juce::Colour colour, float thickness)
             {
                 juce::Path path;
-                auto previousLow = 0.0f, previousHigh = 0.0f;
                 auto started = false;
+
+                const auto toX = [&] (int64_t i)
+                {
+                    return bounds.getX() + (float) (i - startIndex) / (float) count * bounds.getWidth();
+                };
 
                 for (int column = 0; column < columns; ++column)
                 {
@@ -535,31 +673,43 @@ void ScopeComponent::paint (juce::Graphics& g)
 
                     auto low = std::numeric_limits<float>::max();
                     auto high = std::numeric_limits<float>::lowest();
+                    auto lowAt = from, highAt = from;
 
                     for (auto i = from; i < to; ++i)
                     {
                         const auto v = value (fifo.at (i));
-                        low = juce::jmin (low, v);
-                        high = juce::jmax (high, v);
+
+                        if (v < low)  { low = v;  lowAt = i; }
+                        if (v > high) { high = v; highAt = i; }
                     }
 
-                    if (started)
+                    // Both extremes are kept, but each is placed at the x of the
+                    // sample it came from rather than at the column's centre.
+                    // Snapping them to the column instead turns every diagonal
+                    // into a staircase, which is what a slow sidechain is made
+                    // of; this stays smooth there and still goes vertical where
+                    // the content genuinely fills the column.
+                    const auto firstAt = juce::jmin (lowAt, highAt);
+                    const auto first = firstAt == lowAt ? low : high;
+                    const auto second = firstAt == lowAt ? high : low;
+                    const auto secondAt = juce::jmax (lowAt, highAt);
+
+                    if (! started)
                     {
-                        low = juce::jmin (low, previousHigh);
-                        high = juce::jmax (high, previousLow);
+                        path.startNewSubPath (toX (firstAt), toY (first));
+                        started = true;
+                    }
+                    else
+                    {
+                        path.lineTo (toX (firstAt), toY (first));
                     }
 
-                    const auto px = bounds.getX() + (float) column + 0.5f;
-                    path.startNewSubPath (px, toY (high));
-                    path.lineTo (px, toY (low));
-
-                    previousLow = low;
-                    previousHigh = high;
-                    started = true;
+                    path.lineTo (toX (secondAt), toY (second));
                 }
 
                 g.setColour (colour);
-                g.strokePath (path, juce::PathStrokeType (thickness));
+                g.strokePath (path, juce::PathStrokeType (thickness, juce::PathStrokeType::curved,
+                                                          juce::PathStrokeType::rounded));
             };
 
             // The lid is what the carrier is being squashed against, so it is
@@ -569,48 +719,52 @@ void ScopeComponent::paint (juce::Graphics& g)
             drawTrace ([] (const ScopeFrame& f) { return  f.lid; }, lidColour, 1.2f);
             drawTrace ([] (const ScopeFrame& f) { return -f.lid; }, lidColour, 1.2f);
 
-            drawTrace ([] (const ScopeFrame& f) { return f.sc; },  hccolour::accent, 1.6f);
-            drawTrace ([] (const ScopeFrame& f) { return f.out; }, hccolour::output, 1.4f);
+            drawTrace ([] (const ScopeFrame& f) { return f.sc; }, hccolour::accent, 1.6f);
+
+            // Setting a threshold is a question about where the sidechain sits
+            // against the bands. The output answers a different question and
+            // crosses the same ground, so it stands down while one is moving.
+            if (overlay != Overlay::reference)
+                drawTrace ([] (const ScopeFrame& f) { return f.out; }, hccolour::output, 1.4f);
         }
     }
 
-    for (auto sign : { 1.0f, -1.0f })
+    if (showBands)
     {
-        const auto edge = sign > 0.0f ? bounds.getY() : bounds.getBottom();
-        const auto threshold = toY (sign * ceilingLin);
-        const juce::Rectangle<float> band { bounds.getX(), juce::jmin (edge, threshold),
-                                            bounds.getWidth(), std::abs (threshold - edge) };
+        for (auto sign : { 1.0f, -1.0f })
+        {
+            const auto edge = sign > 0.0f ? bounds.getY() : bounds.getBottom();
+            const auto threshold = toY (sign * ceilingLin);
+            const juce::Rectangle<float> band { bounds.getX(), juce::jmin (edge, threshold),
+                                                bounds.getWidth(), std::abs (threshold - edge) };
 
-        g.setGradientFill ({ hccolour::accent.withAlpha (0.07f), bounds.getCentreX(), edge,
-                             hccolour::accent.withAlpha (0.14f), bounds.getCentreX(), threshold, false });
-        g.fillRect (band);
+            g.setGradientFill ({ hccolour::accent.withAlpha (0.07f), bounds.getCentreX(), edge,
+                                 hccolour::accent.withAlpha (0.14f), bounds.getCentreX(), threshold, false });
+            g.fillRect (band);
+        }
     }
 
     g.restoreState();
-
-    g.setFont (hcFont (12.0f));
-    g.setColour (hccolour::brand);
-    g.drawText ("HARDCAP", bounds.reduced (10.0f).translated (0.0f, 3.0f),
-                juce::Justification::bottomLeft);
-
-    g.setColour (hccolour::brandDim);
-    g.drawText ("by miruu", bounds.reduced (10.0f).translated (0.0f, 3.0f)
-                                  .withTrimmedLeft (juce::GlyphArrangement::getStringWidth (hcFont (12.0f), "HARDCAP ")),
-                juce::Justification::bottomLeft);
+    paintWordmark (g, bounds);
 }
 
 //==============================================================================
 SettingsPanel::SettingsPanel (HardCapProcessor& p)
-    : link     (p, ids::scLink,    Pill::Gesture::cycle),
-      hq       (p, ids::hq,        Pill::Gesture::cycle),
+    : scale ("SCALE", Pill::Gesture::cycle),
+      link (p, ids::scLink, Pill::Gesture::cycle),
+      hq (p, ids::hq, Pill::Gesture::cycle),
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
-      source   (p, ids::scSource,  Pill::Gesture::cycle, "SIGNAL")
+      source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL")
 {
-    // AudioParameterBool reads out as "On"/"Off"; the design names the modes.
+    // AudioParameterBool reads out as "On"/"Off"; the design names the modes,
+    // and draws the lesser one dimmed so the pair is readable at a glance.
     hq.overrideText = [&p] { return p.apvts.getRawParameterValue (ids::hq)->load() > 0.5f
                                         ? juce::String ("HQ") : juce::String ("LQ"); };
+    hq.dimWhenOff = true;
 
-    for (auto* pill : { &link, &hq, &filterPos, &source })
+    scale.setComponentID ("scale");
+
+    for (auto* pill : { &link, &hq, &filterPos, &source, &scale })
         addAndMakeVisible (pill);
 }
 
@@ -620,33 +774,28 @@ void SettingsPanel::paint (juce::Graphics& g)
 
     // Figma lifts the whole panel to a lighter slate while it is open.
     paintWell (g, bounds, 12.0f, juce::Colour { 0xff151c22 }, juce::Colour { 0xff2a3844 });
-
-    g.setFont (hcFont (12.0f));
-    g.setColour (hccolour::brand);
-    g.drawText ("HARDCAP", bounds.reduced (10.0f).translated (0.0f, 3.0f),
-                juce::Justification::bottomLeft);
-
-    g.setColour (hccolour::brandDim.brighter (0.4f));
-    g.drawText ("by miruu", bounds.reduced (10.0f).translated (0.0f, 3.0f)
-                                  .withTrimmedLeft (juce::GlyphArrangement::getStringWidth (hcFont (12.0f), "HARDCAP ")),
-                juce::Justification::bottomLeft);
+    paintWordmark (g, bounds, hccolour::brandDim.brighter (0.4f));
 }
 
 void SettingsPanel::resized()
 {
-    // Two centred rows, 8px apart, sized to their own text as in the design.
     const auto centreX = getWidth() / 2;
     const auto centreY = getHeight() / 2;
 
-    const auto place = [] (Pill& a, int aWidth, Pill& b, int bWidth, int cx, int y)
+    const auto row = [centreX] (Pill& a, int aWidth, Pill* b, int bWidth, int y)
     {
-        const auto total = aWidth + 8 + bWidth;
-        a.setBounds (cx - total / 2, y, aWidth, 21);
-        b.setBounds (cx - total / 2 + aWidth + 8, y, bWidth, 21);
+        const auto total = b != nullptr ? aWidth + 8 + bWidth : aWidth;
+        a.setBounds (centreX - total / 2, y, aWidth, 21);
+
+        if (b != nullptr)
+            b->setBounds (centreX - total / 2 + aWidth + 8, y, bWidth, 21);
     };
 
-    place (link, 80, hq, 43, centreX, centreY - 25);
-    place (filterPos, 101, source, 107, centreX, centreY + 4);
+    // Two rows of routing, then the scale on its own below a wider gap -- it is
+    // the one switch here that changes nothing about the audio.
+    row (link, 80, &hq, 43, centreY - 43);
+    row (filterPos, 101, &source, 107, centreY - 14);
+    row (scale, 105, nullptr, 0, centreY + 23);
 }
 
 //==============================================================================
@@ -655,7 +804,7 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
       slopePill (p, ids::slope,   Pill::Gesture::drag),
       floorPill (p, ids::floorDb, Pill::Gesture::drag),
       clipPill  (p, ids::clip,    Pill::Gesture::cycle),
-      filterLabel (p),
+      filterCaption ("FILTER"), shapeCaption ("SHAPE"),
       gear  (BinaryData::settings_svg, BinaryData::settings_svgSize),
       close (BinaryData::close_svg,    BinaryData::close_svgSize),
       led (p), scope (p), settings (p)
@@ -675,17 +824,115 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
         knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f,
                                    juce::MathConstants<float>::pi * 2.75f, true);
 
-    // "This shows OFF if the Filter is off."
-    slopePill.overrideText = [this]
+    const auto filterIsOff = [this]
     {
-        const auto hz = proc.apvts.getRawParameterValue (ids::filterHz)->load();
-        return hz >= filterOffHz - 1.0f ? juce::String ("OFF")
-                                        : proc.apvts.getParameter (ids::slope)->getCurrentValueAsText();
+        return proc.apvts.getRawParameterValue (ids::filterHz)->load() >= filterOffHz - 1.0f;
     };
+
+    // "This shows OFF if the Filter is off."
+    slopePill.overrideText = [this, filterIsOff]
+    {
+        return filterIsOff() ? juce::String ("OFF")
+                             : proc.apvts.getParameter (ids::slope)->getCurrentValueAsText();
+    };
+
+    // With the filter off there are no slopes to choose between, so a drag that
+    // stepped through them would look broken. It brings the filter in instead --
+    // downwards, because that is the direction the cutoff moves.
+    slopePill.chooseDragTarget = [this, filterIsOff]
+    {
+        return proc.apvts.getParameter (filterIsOff() ? ids::filterHz : ids::slope);
+    };
+
+    slopePill.onClick = [this] { showSlopeMenu(); };
 
     clipPill.setOutlined (true);
     clipPill.onTint = hccolour::clipOn;
+    clipPill.dimWhenOff = true;
     clipPill.overrideText = [] { return juce::String ("CLIP"); };
+
+    filterCaption.hoverText = [this]
+    {
+        return proc.apvts.getParameter (ids::filterPos)->getCurrentValueAsText();
+    };
+
+    filterCaption.onClick = [this]
+    {
+        auto& param = *proc.apvts.getParameter (ids::filterPos);
+        param.beginChangeGesture();
+        param.setValueNotifyingHost (param.getValue() > 0.5f ? 0.0f : 1.0f);
+        param.endChangeGesture();
+    };
+
+    // SHAPE's caption only ever reports; letting it take clicks would steal them
+    // from the dial whose padded bounds it sits inside.
+    shapeCaption.setInterceptsMouseClicks (false, false);
+
+    // ---- who gets to claim the display -------------------------------------
+    const auto hover = [this] (bool over) { thresholdHover = over; updateScopeOverlay(); };
+    const auto drag = [this] (bool active) { thresholdDrag = active; updateScopeOverlay(); };
+
+    ceilingKnob.onHover = hover;
+    floorPill.onHover = hover;
+    scope.onHover = hover;
+
+    ceilingKnob.onDragStart = [drag] { drag (true); };
+    ceilingKnob.onDragEnd = [drag] { drag (false); };
+    floorPill.onDragActive = drag;
+
+    filterKnob.onDragStart = [this] { filterCaption.setValueText (filterKnob.getTextFromValue (filterKnob.getValue())); };
+    filterKnob.onDragEnd = [this] { filterCaption.setValueText ({}); };
+
+    filterKnob.onValueChange = [this]
+    {
+        if (filterCaption.isShowingValue())
+            filterCaption.setValueText (filterKnob.getTextFromValue (filterKnob.getValue()));
+    };
+
+    // "While hovering and dragging the Display screen should show ramp as it
+    // would be applied." The audio traces stand down entirely for it -- a
+    // transfer curve and a waveform share an axis and mean different things by it.
+    shapeKnob.onDragStart = [this]
+    {
+        shapeCaption.setValueText (shapeKnob.getTextFromValue (shapeKnob.getValue()));
+        shapeDrag = true;
+        updateScopeOverlay();
+    };
+
+    shapeKnob.onDragEnd = [this]
+    {
+        shapeCaption.setValueText ({});
+        shapeDrag = false;
+        updateScopeOverlay();
+    };
+
+    shapeKnob.onValueChange = [this]
+    {
+        if (shapeCaption.isShowingValue())
+            shapeCaption.setValueText (shapeKnob.getTextFromValue (shapeKnob.getValue()));
+
+        if (shapeDrag)
+            scope.repaint();
+    };
+
+    // ---- the scale switch, which is a preference and not a parameter --------
+    settings.scale.overrideText = [this]
+    {
+        return juce::String (juce::roundToInt (scaleFactor * 100.0f)) + "%";
+    };
+
+    settings.scale.onClick = [this]
+    {
+        static constexpr float steps[] { 0.75f, 1.0f, 1.25f, 1.5f };
+        auto index = 0;
+
+        for (int i = 0; i < (int) std::size (steps); ++i)
+            if (juce::approximatelyEqual (scaleFactor, steps[i]))
+                index = i;
+
+        setScale (steps[(index + 1) % (int) std::size (steps)]);
+        settings.scale.repaint();
+    };
 
     // The scope is only ever one of the two, at the same bounds, so the panel is
     // a swap rather than an overlay -- that is how the Figma variant reads.
@@ -699,16 +946,12 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
     addAndMakeVisible (gear);
     addChildComponent (close);
 
-    // After the dial, so it wins the clicks inside the dial's padded bounds.
-    addAndMakeVisible (filterLabel);
+    // After the dials, so they win the clicks inside the dials' padded bounds.
+    addAndMakeVisible (filterCaption);
+    addAndMakeVisible (shapeCaption);
 
     gear.onClick = [this] { showSettings (true); };
     close.onClick = [this] { showSettings (false); };
-
-    // "While hovering and dragging the Display screen should show ramp as it
-    // would be applied."
-    shapeKnob.onDragStart = [this] { scope.setShapePreview (true); };
-    shapeKnob.onDragEnd = [this] { scope.setShapePreview (false); };
 
     lastFilterPost = proc.filterIsPost.load (std::memory_order_relaxed);
 
@@ -726,7 +969,55 @@ HardCapEditor::~HardCapEditor()
     setLookAndFeel (nullptr);
 }
 
-void HardCapEditor::addSlider (juce::Slider& slider, juce::Slider::SliderStyle style,
+void HardCapEditor::showSlopeMenu()
+{
+    auto& slope = *proc.apvts.getParameter (ids::slope);
+    const auto choices = slope.getAllValueStrings();
+    const auto current = juce::roundToInt (slope.getValue() * (float) (choices.size() - 1));
+
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&lookAndFeel);
+
+    for (int i = 0; i < choices.size(); ++i)
+        menu.addItem (i + 1, choices[i], true, i == current);
+
+    menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (&slopePill),
+                        [safe = juce::Component::SafePointer<HardCapEditor> (this)] (int choice)
+                        {
+                            if (choice <= 0 || safe == nullptr)
+                                return;
+
+                            safe->applySlope (choice - 1);
+                        });
+}
+
+void HardCapEditor::applySlope (int index)
+{
+    auto& slope = *proc.apvts.getParameter (ids::slope);
+    slope.beginChangeGesture();
+    slope.setValueNotifyingHost (slope.convertTo0to1 ((float) index));
+    slope.endChangeGesture();
+
+    // Picking a slope for a filter that is switched off asks for a filter. 160 Hz
+    // is low enough to be doing something to a sub without swallowing it.
+    if (proc.apvts.getRawParameterValue (ids::filterHz)->load() < filterOffHz - 1.0f)
+        return;
+
+    auto& filter = *proc.apvts.getParameter (ids::filterHz);
+    filter.beginChangeGesture();
+    filter.setValueNotifyingHost (filter.convertTo0to1 (160.0f));
+    filter.endChangeGesture();
+}
+
+void HardCapEditor::updateScopeOverlay()
+{
+    scope.setOverlay (shapeDrag      ? ScopeComponent::Overlay::shape
+                    : thresholdDrag  ? ScopeComponent::Overlay::reference
+                    : thresholdHover ? ScopeComponent::Overlay::thresholds
+                                     : ScopeComponent::Overlay::traces);
+}
+
+void HardCapEditor::addSlider (HoverSlider& slider, juce::Slider::SliderStyle style,
                                const char* paramId, juce::Colour pointer, bool withReadout,
                                std::unique_ptr<SliderAttachment>& attachment)
 {
@@ -755,26 +1046,6 @@ void HardCapEditor::setScale (float scale)
     setSize (designWidth, designHeight);
 }
 
-void HardCapEditor::mouseDown (const juce::MouseEvent& e)
-{
-    if (! e.mods.isPopupMenu())
-        return;
-
-    juce::PopupMenu menu;
-    menu.setLookAndFeel (&lookAndFeel);
-
-    for (auto percent : { 75, 100, 125, 150 })
-        menu.addItem (percent, juce::String (percent) + "%", true,
-                      juce::approximatelyEqual (scaleFactor, (float) percent / 100.0f));
-
-    menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (this),
-                        [safe = juce::Component::SafePointer<HardCapEditor> (this)] (int choice)
-                        {
-                            if (choice > 0 && safe != nullptr)
-                                safe->setScale ((float) choice / 100.0f);
-                        });
-}
-
 void HardCapEditor::showSettings (bool shouldShow)
 {
     scope.setVisible (! shouldShow);
@@ -789,6 +1060,7 @@ void HardCapEditor::refreshFromParameters()
     for (auto* slider : { &preSlider, &outputSlider, &ceilingKnob, &filterKnob, &shapeKnob })
         slider->updateText();
 
+    updateScopeOverlay();
     timerCallback();
     repaint();
 }
@@ -845,12 +1117,9 @@ void HardCapEditor::paint (juce::Graphics& g)
 
     g.setFont (hcFont (16.0f));
     g.setColour (hccolour::label);
-    g.drawText ("PRE",     juce::Rectangle<int> {  48, 48,  42, 19 }, juce::Justification::centred);
-    g.drawText ("CEILING", juce::Rectangle<int> { 164, 48,  77, 19 }, juce::Justification::centred);
-    g.drawText ("OUT",     juce::Rectangle<int> { 878, 48,  42, 19 }, juce::Justification::centred);
-
-    g.setFont (hcFont (12.0f));
-    g.drawText ("SHAPE", juce::Rectangle<int> { 334, 176, 50, 13 }, juce::Justification::centred);
+    g.drawText ("PRE",     juce::Rectangle<int> {  48, 48, 42, 19 }, juce::Justification::centred);
+    g.drawText ("CEILING", juce::Rectangle<int> { 164, 48, 77, 19 }, juce::Justification::centred);
+    g.drawText ("OUT",     juce::Rectangle<int> { 878, 48, 42, 19 }, juce::Justification::centred);
 }
 
 void HardCapEditor::resized()
@@ -866,7 +1135,11 @@ void HardCapEditor::resized()
     shapeKnob.setBounds    ( 320, 181,  78,  78); // r 25 at (359,220)
 
     led.setBounds          ( 224,  33,  48,  48); // 4px dot at (248,57), rest is glow
-    filterLabel.setBounds  ( 335, 137,  48,  13);
+
+    // Wider than the design's 48, because these also have to hold a value like
+    // "12.50 kHz" once their dial is moving. Both stay centred on their dial.
+    filterCaption.setBounds ( 325, 137,  68, 13);
+    shapeCaption.setBounds  ( 324, 176,  70, 13);
 
     slopePill.setBounds    ( 313,  48,  92,  21);
     floorPill.setBounds    ( 313, 257,  92,  21);

@@ -108,7 +108,8 @@ build/hardcap_shot_artefacts/Release/hardcap_shot out.png [args...]
 |---|---|
 | `<id>=<value>` | any parameter from `ids::`, in its own units — `ceiling=-24`, `slope=3`, `clip=0` |
 | `audio=<hz>` | push a sub at that frequency through the sidechain against a carrier, so the scope has something to draw |
-| `hover=<id>` | put a control into its hover state — `hover=clip`, `hover=slope`, `hover=filterlabel` |
+| `hover=<id>` | put a control into its hover state — `hover=clip`, `hover=ceiling`, `hover=scope` |
+| `drag=<id>` | put a control into its dragging state, which is what the scope's overlays key off — `drag=ceiling`, `drag=shape` |
 | `settings` | render the settings panel instead of the scope |
 | `crop=x,y,w,h` | crop, in design coordinates |
 | `scale=N` | supersample, for looking at detail |
@@ -128,6 +129,8 @@ A newer push cancels an in-flight run for the same ref. Tags are exempt.
 The DSP is complete and matches the spec, and the interface now implements the Figma design — layout, typeface, dial and fader artwork, the recessed wells, the glows, the oscilloscope overlays, and the hover and engaged states from the file's component variants. See [SPEC §5](SPEC.md) for what was taken from where.
 
 **HQ** has a control now: the gear in the scope's upper-right swaps in the settings panel, where HQ sits alongside STEREO, FILTER PRE/POST and SIGNAL EXT — matching the Oscilloscope "Variant3" component rather than a popup, because the file has no popup designed anywhere.
+
+The scope's overlays are state-driven rather than always on — see [SPEC §5.3](SPEC.md) for which control summons which.
 
 Known gaps, both cosmetic: the readouts print the parameters' own strings (`-6.0 dB`) where the design shows a compact `0dB`, and the design's fader caps are parked at a position that does not correspond to their labelled value, so cap travel is mapped linearly across the track instead.
 

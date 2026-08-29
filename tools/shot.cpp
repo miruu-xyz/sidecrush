@@ -2,7 +2,7 @@
 // device. See the target comment in CMakeLists.txt for why this exists.
 //
 //   hardcap_shot out.png [<param>=<value>] [hover=<id>] [settings]
-//                        [audio=<sidechain Hz>] [scale=N] [crop=x,y,w,h]
+//                        [audio=<sidechain Hz>] [drag=<id>] [scale=N] [crop=x,y,w,h]
 //
 // <param> is any id from ids::, given in the parameter's own units, e.g.
 // ceiling=-24, slope=3, clip=0. Unknown keys are an error rather than a silent
@@ -53,7 +53,7 @@ int main (int argc, char** argv)
     if (argc < 2)
     {
         std::puts ("usage: hardcap_shot out.png [param=value ...] [hover=id] "
-                   "[settings] [audio=hz] [scale=N] [crop=x,y,w,h]");
+                   "[settings] [audio=hz] [drag=id] [scale=N] [crop=x,y,w,h]");
         return 1;
     }
 
@@ -68,6 +68,7 @@ int main (int argc, char** argv)
     juce::Rectangle<int> crop;
     auto scale = 1.0f;
     auto sidechainHz = 0.0;
+    juce::String dragId;
 
     for (int i = 2; i < argc; ++i)
     {
@@ -91,6 +92,7 @@ int main (int argc, char** argv)
         if (key == "scale")      { scale = value.getFloatValue(); continue; }
         if (key == "hover")      { hoverId = value; continue; }
         if (key == "audio")      { sidechainHz = value.getDoubleValue(); continue; }
+        if (key == "drag")       { dragId = value; continue; }
 
         if (key == "crop")
         {
@@ -152,6 +154,23 @@ int main (int argc, char** argv)
     // Parameter changes reach the editor through async listener callbacks, and
     // nothing pumps the message queue here.
     editor->refreshFromParameters();
+
+    // Same idea as hover: a drag is normally announced by JUCE's mouse handling,
+    // and these are the public callbacks it would fire.
+    if (dragId.isNotEmpty())
+    {
+        auto* target = findById (*editor, dragId);
+
+        if (auto* slider = dynamic_cast<juce::Slider*> (target); slider != nullptr && slider->onDragStart)
+            slider->onDragStart();
+        else if (auto* pill = dynamic_cast<Pill*> (target); pill != nullptr && pill->onDragActive)
+            pill->onDragActive (true);
+        else
+        {
+            std::printf ("nothing draggable with id: %s\n", dragId.toRawUTF8());
+            return 1;
+        }
+    }
 
     if (hoverId.isNotEmpty())
     {
