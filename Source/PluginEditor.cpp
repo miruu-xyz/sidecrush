@@ -512,62 +512,47 @@ void ScopeComponent::paint (juce::Graphics& g)
     const auto amp = bounds.getHeight() * 0.5f - 10.0f;
     const auto toY = [&] (float v) { return mid - juce::jlimit (-1.2f, 1.2f, v) * amp; };
 
-    // The centre line is the axis everything else is read against, including the
-    // SHAPE curve's mirror, so it is the one thing drawn in every mode.
-    // Snapped to a whole row: at 1x a half-pixel line is drawn as two rows at
-    // half strength, which reads as a smudge rather than the design's hairline.
-    g.setColour (hccolour::scopeLine);
-    g.fillRect (bounds.getX(), std::floor (mid) - 1.0f, bounds.getWidth(), 1.0f);
-
     if (overlay == Overlay::shape)
     {
-        // SHAPE is a transfer curve, not a waveform: x is how far the detector
-        // has crossed the window, y is the aperture that leaves. Drawn mirrored
-        // because the scope it replaces is bipolar, and a one-sided curve in the
-        // same frame reads as a signal sitting off-centre.
-        const auto exponent = std::pow (2.0f, -4.0f * processor.apvts.getRawParameterValue (ids::shape)->load());
+        // SHAPE is a transfer curve, not a waveform. x is how far the detector
+        // has crossed the FLOOR..CEILING window; y is how far the lid has closed
+        // by then. Nothing here is bipolar, so the centre line stays out of it.
+        //
+        // Plotted on a square, centred, so that SHAPE 0 is a true 45 degrees and
+        // the two halves of the control read as the reflections they are: the
+        // exponent is 2^(-4*shape), so +s and -s give t^p against t^(1/p), which
+        // are mirror images about that diagonal. On a 380x230 frame they would
+        // not be.
+        shapeCurve.setShape (processor.apvts.getRawParameterValue (ids::shape)->load());
 
-        juce::Path upper, lower, fill;
+        const auto side = juce::jmin (bounds.getWidth(), bounds.getHeight()) - 80.0f;
+        const auto plot = juce::Rectangle<float> { side, side }.withCentre (bounds.getCentre());
 
-        for (int i = 0; i <= 160; ++i)
+        juce::Path curve;
+
+        for (int i = 0; i <= 256; ++i)
         {
-            const auto t = (float) i / 160.0f;
-            const auto lid = 1.0f - std::pow (t, exponent);
-            const auto px = bounds.getX() + t * bounds.getWidth();
+            const auto t = (float) i / 256.0f;
+            const auto closed = 1.0f - shapeCurve.lid (t);
+            const juce::Point<float> point { plot.getX() + t * side,
+                                             plot.getBottom() - closed * side };
 
-            if (i == 0)
-            {
-                upper.startNewSubPath (px, toY (lid));
-                lower.startNewSubPath (px, toY (-lid));
-                fill.startNewSubPath (px, toY (lid));
-            }
-            else
-            {
-                upper.lineTo (px, toY (lid));
-                lower.lineTo (px, toY (-lid));
-                fill.lineTo (px, toY (lid));
-            }
+            i == 0 ? curve.startNewSubPath (point) : curve.lineTo (point);
         }
-
-        for (int i = 160; i >= 0; --i)
-        {
-            const auto t = (float) i / 160.0f;
-            fill.lineTo (bounds.getX() + t * bounds.getWidth(), toY (-(1.0f - std::pow (t, exponent))));
-        }
-
-        fill.closeSubPath();
-
-        g.setColour (hccolour::accent.withAlpha (0.10f));
-        g.fillPath (fill);
 
         g.setColour (hccolour::accent);
-        g.strokePath (upper, juce::PathStrokeType (1.8f));
-        g.strokePath (lower, juce::PathStrokeType (1.8f));
+        g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
 
         g.restoreState();
         paintWordmark (g, bounds);
         return;
     }
+
+    // Snapped to a whole row: at 1x a half-pixel line is drawn as two rows at
+    // half strength, which reads as a smudge rather than the design's hairline.
+    g.setColour (hccolour::scopeLine);
+    g.fillRect (bounds.getX(), std::floor (mid) - 1.0f, bounds.getWidth(), 1.0f);
 
     // ---- ceiling and floor, as the bands from the "Threshold lines" variant --
     // Derived here rather than mirrored out of the engine: the engine only
@@ -1015,6 +1000,10 @@ void HardCapEditor::updateScopeOverlay()
                     : thresholdDrag  ? ScopeComponent::Overlay::reference
                     : thresholdHover ? ScopeComponent::Overlay::thresholds
                                      : ScopeComponent::Overlay::traces);
+
+    // CLIP belongs to the scope's frame, not to the SHAPE curve that stands in
+    // for it -- only the wordmark and the gear carry over.
+    clipPill.setVisible (! settings.isVisible() && ! shapeDrag);
 }
 
 void HardCapEditor::addSlider (HoverSlider& slider, juce::Slider::SliderStyle style,
@@ -1052,7 +1041,7 @@ void HardCapEditor::showSettings (bool shouldShow)
     settings.setVisible (shouldShow);
     gear.setVisible (! shouldShow);
     close.setVisible (shouldShow);
-    clipPill.setVisible (! shouldShow);
+    updateScopeOverlay();
 }
 
 void HardCapEditor::refreshFromParameters()

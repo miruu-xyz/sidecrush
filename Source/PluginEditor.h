@@ -280,6 +280,10 @@ private:
     HardCapProcessor& processor;
     int64_t snapshotHead = 0;
     Overlay overlay = Overlay::traces;
+
+    // The DSP's own lookup table, not a second copy of the formula. The curve on
+    // screen is then the curve the audio takes, clamp and quantisation included.
+    hardcap::ShapeTable shapeCurve;
 };
 
 //==============================================================================
