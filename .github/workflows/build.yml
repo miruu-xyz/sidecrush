@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # A prose change does not need two platforms, pluginval and a 30-minute
+    # sanitizer run. GitHub does not evaluate path filters for tag pushes, so a
+    # release still builds regardless of what its commit happened to touch.
+    #
+    # Deliberately not applied to pull_request: a workflow skipped by a path
+    # filter never reports a status, so if branch protection is ever turned on,
+    # a docs-only PR would sit forever waiting for a check that cannot arrive.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
   workflow_dispatch:
 
