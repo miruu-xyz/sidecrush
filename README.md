@@ -56,7 +56,15 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The VST3 lands in `build/HardCap_artefacts/Release/VST3/`, and a standalone app beside it.
+The VST3 lands in `build/HardCap_artefacts/Release/VST3/`, with a standalone app beside it, and is **copied into your user plug-in folder after every build** so it is immediately loadable in a DAW:
+
+| | |
+|---|---|
+| macOS | `~/Library/Audio/Plug-Ins/VST3/` |
+| Windows | `%COMMONPROGRAMFILES%\VST3\` |
+| Linux | `~/.vst3/` |
+
+Pass `-DHARDCAP_COPY_AFTER_BUILD=OFF` to skip it. CI always does.
 
 On macOS, building without full Xcode works — Command Line Tools are enough for VST3 and Standalone.
 

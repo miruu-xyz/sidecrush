@@ -11,6 +11,12 @@ if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures")
 endif()
 
+# On by default so local builds land straight in the DAW. CI turns it off --
+# the Windows destination is under Program Files and copying there is neither
+# wanted nor reliably permitted on a runner.
+option(HARDCAP_COPY_AFTER_BUILD
+       "Copy the built VST3 into the user plug-in folder after each build" ON)
+
 include(FetchContent)
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -33,7 +39,7 @@ juce_add_plugin(HardCap
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    COPY_PLUGIN_AFTER_BUILD     FALSE)
+    COPY_PLUGIN_AFTER_BUILD     ${HARDCAP_COPY_AFTER_BUILD})
 
 target_sources(HardCap PRIVATE
     Source/PluginProcessor.cpp
