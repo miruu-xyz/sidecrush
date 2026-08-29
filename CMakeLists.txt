@@ -1,15 +1,18 @@
 cmake_minimum_required(VERSION 3.22)
 
+# Both slices in one build. Ableton Live's plug-in scanner runs as x86-64 even
+# on Apple Silicon, so an arm64-only bundle is rejected outright ("doesn't
+# contain a version for the current architecture") and never reaches the browser.
+# Must be set before project(): after it, the toolchain is already configured
+# and CMake ignores the change.
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
+
 project(HardCap VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-if(APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
-    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures")
-endif()
 
 # On by default so local builds land straight in the DAW. CI turns it off --
 # the Windows destination is under Program Files and copying there is neither

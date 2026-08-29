@@ -3,35 +3,50 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+
+# A newer push supersedes an in-flight run for the same ref. Tags are exempt:
+# a release build should never be cancelled by whatever lands next.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
   BUILD_TYPE: Release
 
 jobs:
+  setup:
+    name: Select platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        shell: bash
+        run: |
+          linux='{"name":"Linux","os":"ubuntu-latest","generator":"-G Ninja","pluginval":"pluginval_Linux.zip"}'
+          windows='{"name":"Windows","os":"windows-latest","generator":"","pluginval":"pluginval_Windows.zip"}'
+          macos='{"name":"macOS","os":"macos-latest","generator":"-G Ninja","pluginval":"pluginval_macOS.zip"}'
+
+          # On a private repo macOS runners bill at 10x (Windows 2x, Linux 1x),
+          # and macOS is the one platform that can be tested locally for free.
+          # Reserve it for tags and manual runs.
+          if [ "${{ github.ref_type }}" = "tag" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "matrix=[$linux,$windows,$macos]" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=[$linux,$windows]" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: ${{ matrix.name }}
+    needs: setup
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS
-            os: macos-latest
-            generator: -G Ninja
-            pluginval: pluginval_macOS.zip
-          # No -G Ninja on Windows: with Ninja on the PATH, CMake picks up MinGW
-          # rather than MSVC and JUCE refuses to build. The default Visual Studio
-          # generator is multi-config, hence --config on the build and test steps.
-          - name: Windows
-            os: windows-latest
-            generator: ""
-            pluginval: pluginval_Windows.zip
-          - name: Linux
-            os: ubuntu-latest
-            generator: -G Ninja
-            pluginval: pluginval_Linux.zip
+        include: ${{ fromJSON(needs.setup.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v5
@@ -57,12 +72,15 @@ jobs:
           path: build/_deps
           key: ${{ runner.os }}-juce-9.0.1
 
+      # No -G Ninja on Windows: with Ninja on the PATH, CMake picks up MinGW
+      # rather than MSVC and JUCE refuses to build. The default Visual Studio
+      # generator is multi-config, hence --config on the build and test steps.
       - name: Configure
+        shell: bash
         run: >
           cmake -B build ${{ matrix.generator }}
           -DCMAKE_BUILD_TYPE=$BUILD_TYPE
           -DHARDCAP_COPY_AFTER_BUILD=OFF
-        shell: bash
 
       - name: Build
         run: cmake --build build --config $BUILD_TYPE --parallel 4

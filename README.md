@@ -77,6 +77,12 @@ Two, both plain executables with no framework:
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
 
+### CI
+
+Every push builds and validates on Linux and Windows: `ctest`, then `pluginval` at strictness 10, plus a separate ASan/UBSan job. **macOS runs on tags and manual dispatch only** — it bills at 10x on a private repo and it is the one platform that can be tested locally for free. Run it on demand from the Actions tab when you want it.
+
+A newer push cancels an in-flight run for the same ref. Tags are exempt.
+
 ## Status
 
 The DSP is complete and matches the spec. The interface is **functional but not yet the real one** — controls, layout and the oscilloscope all work, but the Figma design's custom knob artwork, glows and typography are not yet drawn. That is the next chunk of work.
