@@ -575,18 +575,11 @@ void ScopeComponent::paint (juce::Graphics& g)
         return;
     }
 
-    // Snapped to a whole row: at 1x a half-pixel line is drawn as two rows at
-    // half strength, which reads as a smudge rather than the design's hairline.
-    g.setColour (hccolour::scopeLine);
-    g.fillRect (bounds.getX(), std::floor (mid) - 1.0f, bounds.getWidth(), 1.0f);
-
-    // ---- ceiling and floor, as the bands from the "Threshold lines" variant --
+    // ---- where the thresholds sit -------------------------------------------
     // Derived here rather than mirrored out of the engine: the engine only
-    // refreshes its copy inside processBlock, so in a stopped host the bands
-    // would sit at their defaults until playback started. Run through the
-    // engine's own clamp so the drawn floor cannot climb above the drawn
-    // ceiling -- the audio refuses to let the window invert, and a picture that
-    // showed otherwise would be lying about what the controls did.
+    // refreshes its copy inside processBlock, so in a stopped host these would
+    // sit at their defaults until playback started. Run through the engine's own
+    // clamp so the drawn floor cannot climb above the drawn ceiling.
     const auto ceilingLin = juce::Decibels::decibelsToGain (
         processor.apvts.getRawParameterValue (ids::ceiling)->load());
     const auto requestedFloorDb = processor.apvts.getRawParameterValue (ids::floorDb)->load();
@@ -594,18 +587,33 @@ void ScopeComponent::paint (juce::Graphics& g)
         requestedFloorDb <= floorOffDb ? 0.0f : juce::Decibels::decibelsToGain (requestedFloorDb),
         ceilingLin);
 
-    const auto showBands = overlay == Overlay::thresholds || overlay == Overlay::reference;
+    const auto showThresholds = overlay == Overlay::thresholds;
+    const auto centreX = bounds.getCentreX();
 
-    // Figma's layer order matters here and is not the obvious one: the floor
-    // band goes *under* the traces and the lid bands go over the top of them.
-    // Drawing the lid bands first instead loses the tint where a trace crosses
-    // into the clamped region, which is the one place the overlay is telling you
-    // something.
-    if (showBands && floorLin > 0.0f)
+    // Both sidechain gradients run the full +/-1 amplitude span, so their stops
+    // can be placed at the ceiling and the floor and stay there as those move.
+    // Figma builds these by hand and its annotation asks for "the easiest
+    // programmatic way possible" -- which is this, since JUCE will fill a
+    // stroke from a gradient just as happily as it fills a shape.
+    const auto atAmplitude = [] (float a)
     {
-        g.setColour (hccolour::clipOn.withAlpha (0.2f));
-        g.fillRect (bounds.getX(), toY (floorLin), bounds.getWidth(), toY (-floorLin) - toY (floorLin));
-    }
+        return juce::jlimit (0.001, 0.999, (1.0 - (double) a) * 0.5);
+    };
+
+    // With FLOOR at INSTANT the two floor stops would land on the same spot; a
+    // hair of separation keeps the gradient's stops strictly ordered and makes
+    // the fade run all the way to the zero crossing, which is what no floor
+    // means anyway.
+    const auto floorEdge = juce::jmax (floorLin, 0.004f);
+
+    // Solid where the sidechain is above the ceiling, gone where it is below the
+    // floor: the trace is drawn only where it is actually doing something.
+    juce::ColourGradient window { hccolour::accent, centreX, toY (1.0f),
+                                  hccolour::accent, centreX, toY (-1.0f), false };
+    window.addColour (atAmplitude (ceilingLin), hccolour::accent);
+    window.addColour (atAmplitude (floorEdge), hccolour::accent.withAlpha (0.0f));
+    window.addColour (atAmplitude (-floorEdge), hccolour::accent.withAlpha (0.0f));
+    window.addColour (atAmplitude (-ceilingLin), hccolour::accent);
 
     // ---- traces -------------------------------------------------------------
     const auto& fifo = processor.scope;
@@ -643,14 +651,15 @@ void ScopeComponent::paint (juce::Graphics& g)
             }
         }
 
-        // Auto timebase: two cycles of whatever the sidechain is doing, so a
-        // 40 Hz sub and a 100 Hz sub fill the window the same way.
-        int64_t window = 1024;
+        // Auto timebase: the design asks for "one or two cycles of the sidechain
+        // wave", so the period is measured from the crossing interval and
+        // clamped. A 40 Hz sub and a 100 Hz sub then fill the window the same way.
+        int64_t window_ = 1024;
 
         if (previous > 0 && trigger > previous)
-            window = juce::jlimit<int64_t> (128, 8192, (trigger - previous) * 2);
+            window_ = juce::jlimit<int64_t> (128, 8192, (trigger - previous) * 2);
 
-        const auto startIndex = juce::jmax<int64_t> (1, trigger - window);
+        const auto startIndex = juce::jmax<int64_t> (1, trigger - window_);
         const auto count = trigger - startIndex;
 
         if (count >= 8)
@@ -659,15 +668,13 @@ void ScopeComponent::paint (juce::Graphics& g)
             // polyline through every sixth sample is what actually gets drawn --
             // it misses the peaks, and which samples it lands on shifts frame to
             // frame, so the carrier crawls. Each column is drawn as the range of
-            // the samples inside it instead.
-            //
-            // One continuous path per trace, not a segment per column: separate
-            // subpaths get their own end caps, which doubles up wherever columns
-            // meet and leaves the line visibly heavier in dense passages than in
-            // quiet ones.
+            // the samples inside it, with each extreme placed at the x of the
+            // sample it came from so that diagonals do not turn into staircases.
             const auto columns = juce::jmax (1, (int) bounds.getWidth());
+            const auto firstX = bounds.getX() + 0.5f;
+            const auto lastX = bounds.getX() + (float) (columns - 1) + 0.5f;
 
-            const auto drawTrace = [&] (auto value, juce::Colour colour, float thickness)
+            const auto buildTrace = [&] (auto value)
             {
                 juce::Path path;
                 auto started = false;
@@ -694,16 +701,10 @@ void ScopeComponent::paint (juce::Graphics& g)
                         if (v > high) { high = v; highAt = i; }
                     }
 
-                    // Both extremes are kept, but each is placed at the x of the
-                    // sample it came from rather than at the column's centre.
-                    // Snapping them to the column instead turns every diagonal
-                    // into a staircase, which is what a slow sidechain is made
-                    // of; this stays smooth there and still goes vertical where
-                    // the content genuinely fills the column.
                     const auto firstAt = juce::jmin (lowAt, highAt);
+                    const auto secondAt = juce::jmax (lowAt, highAt);
                     const auto first = firstAt == lowAt ? low : high;
                     const auto second = firstAt == lowAt ? high : low;
-                    const auto secondAt = juce::jmax (lowAt, highAt);
 
                     if (! started)
                     {
@@ -718,29 +719,78 @@ void ScopeComponent::paint (juce::Graphics& g)
                     path.lineTo (toX (secondAt), toY (second));
                 }
 
-                g.setColour (colour);
-                g.strokePath (path, juce::PathStrokeType (thickness, juce::PathStrokeType::curved,
-                                                          juce::PathStrokeType::rounded));
+                return path;
             };
 
-            // The lid is what the carrier is being squashed against, so it is
-            // drawn as the aperture it actually is -- mirrored either side of
-            // zero, with the output visibly slamming into it.
-            const auto lidColour = hccolour::hairline.brighter (0.7f);
-            drawTrace ([] (const ScopeFrame& f) { return  f.lid; }, lidColour, 1.2f);
-            drawTrace ([] (const ScopeFrame& f) { return -f.lid; }, lidColour, 1.2f);
+            const auto stroke = [] (float thickness)
+            {
+                return juce::PathStrokeType (thickness, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded);
+            };
 
-            drawTrace ([] (const ScopeFrame& f) { return f.sc; }, hccolour::accent, 1.6f);
+            // Closing a trace onto a horizontal edge turns it into a shape. The
+            // sidechain crosses its own baseline repeatedly, so the polygon
+            // self-intersects -- non-zero winding, which is JUCE's default,
+            // fills the lobes either side of it rather than cancelling them.
+            const auto closeOnto = [&] (juce::Path path, float y)
+            {
+                path.lineTo (lastX, y);
+                path.lineTo (firstX, y);
+                path.closeSubPath();
+                return path;
+            };
 
-            // Setting a threshold is a question about where the sidechain sits
-            // against the bands. The output answers a different question and
-            // crosses the same ground, so it stands down while one is moving.
-            if (overlay != Overlay::reference)
-                drawTrace ([] (const ScopeFrame& f) { return f.out; }, hccolour::output, 1.4f);
+            const auto sidechain = buildTrace ([] (const ScopeFrame& f) { return f.sc; });
+            const auto output = buildTrace ([] (const ScopeFrame& f) { return f.out; });
+
+            if (showThresholds)
+            {
+                // The sidechain is the thing being measured against the bands,
+                // so it becomes a solid body and everything else steps back to a
+                // ghost. Figma drops the lid aperture entirely here.
+                g.setGradientFill (window);
+                g.fillPath (closeOnto (sidechain, mid));
+
+                // ... and its outline greys out where it is inside the floor
+                // band, where the lid is wide open and the level means nothing.
+                juce::ColourGradient outline { hccolour::accent, centreX, toY (1.0f),
+                                               hccolour::accent, centreX, toY (-1.0f), false };
+                outline.addColour (atAmplitude (floorEdge) - 0.006, hccolour::accent);
+                outline.addColour (atAmplitude (floorEdge), hccolour::belowFloor);
+                outline.addColour (atAmplitude (-floorEdge), hccolour::belowFloor);
+                outline.addColour (atAmplitude (-floorEdge) + 0.006, hccolour::accent);
+
+                g.setGradientFill (outline);
+                g.strokePath (sidechain, stroke (1.6f));
+
+                g.setColour (hccolour::output.withAlpha (0.1f));
+                g.strokePath (output, stroke (1.4f));
+            }
+            else
+            {
+                g.setGradientFill (window);
+                g.strokePath (sidechain, stroke (1.6f));
+
+                // The lid as the aperture it is: everything outside it masked
+                // off, densest against the opening and fading out towards the
+                // frame, so the cap visibly closes in from top and bottom.
+                g.setGradientFill ({ juce::Colours::white.withAlpha (0.0f), centreX, bounds.getY(),
+                                     juce::Colours::white.withAlpha (0.08f), centreX, mid, false });
+                g.fillPath (closeOnto (buildTrace ([] (const ScopeFrame& f) { return f.lid; }),
+                                       bounds.getY()));
+
+                g.setGradientFill ({ juce::Colours::white.withAlpha (0.08f), centreX, mid,
+                                     juce::Colours::white.withAlpha (0.0f), centreX, bounds.getBottom(), false });
+                g.fillPath (closeOnto (buildTrace ([] (const ScopeFrame& f) { return -f.lid; }),
+                                       bounds.getBottom()));
+
+                g.setColour (hccolour::output);
+                g.strokePath (output, stroke (1.4f));
+            }
         }
     }
 
-    if (showBands)
+    if (showThresholds)
     {
         for (auto sign : { 1.0f, -1.0f })
         {
@@ -749,9 +799,16 @@ void ScopeComponent::paint (juce::Graphics& g)
             const juce::Rectangle<float> band { bounds.getX(), juce::jmin (edge, threshold),
                                                 bounds.getWidth(), std::abs (threshold - edge) };
 
-            g.setGradientFill ({ hccolour::accent.withAlpha (0.07f), bounds.getCentreX(), edge,
-                                 hccolour::accent.withAlpha (0.14f), bounds.getCentreX(), threshold, false });
+            g.setGradientFill ({ hccolour::accent.withAlpha (0.07f), centreX, edge,
+                                 hccolour::accent.withAlpha (0.14f), centreX, threshold, false });
             g.fillRect (band);
+        }
+
+        if (floorLin > 0.0f)
+        {
+            g.setColour (hccolour::clipOn.withAlpha (0.2f));
+            g.fillRect (bounds.getX(), toY (floorLin), bounds.getWidth(),
+                        toY (-floorLin) - toY (floorLin));
         }
     }
 
@@ -1022,10 +1079,9 @@ void HardCapEditor::applySlope (int index)
 
 void HardCapEditor::updateScopeOverlay()
 {
-    scope.setOverlay (shapeDrag      ? ScopeComponent::Overlay::shape
-                    : thresholdDrag  ? ScopeComponent::Overlay::reference
-                    : thresholdHover ? ScopeComponent::Overlay::thresholds
-                                     : ScopeComponent::Overlay::traces);
+    scope.setOverlay (shapeDrag                      ? ScopeComponent::Overlay::shape
+                    : thresholdDrag || thresholdHover ? ScopeComponent::Overlay::thresholds
+                                                      : ScopeComponent::Overlay::traces);
 
     // CLIP belongs to the scope's frame, not to the SHAPE curve that stands in
     // for it -- only the wordmark and the gear carry over.

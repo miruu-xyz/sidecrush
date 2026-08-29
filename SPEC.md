@@ -203,19 +203,34 @@ no designed popup anywhere in the file.
 
 | element | colour | meaning |
 |---|---|---|
-| sidechain | cyan line | filtered sidechain, post-filter, pre-rectifier — the signal the thresholds measure |
-| ±CEILING | cyan gradient bands | fill from each edge inward to the threshold; the clamped region. Shown on demand — see 5.3 |
-| ±FLOOR | red band | symmetric around the centre; collapses to nothing at INSTANT. Shown on demand — see 5.3 |
-| lid | grey line pair | ±lid, the aperture the carrier is squashed against |
+| sidechain | cyan line, or a cyan body | filtered sidechain, post-filter, pre-rectifier — the signal the thresholds measure |
+| lid | white mask at 8% | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
 | output | white line | slams flat against the aperture as it closes |
+| ±CEILING | cyan gradient bands | from each edge inward to the threshold; the clamped region |
+| ±FLOOR | red band | symmetric around the centre; collapses to nothing at INSTANT |
+
+Which of those are drawn depends on what is being touched — see 5.3. There is no
+zero line: the sidechain is symmetric about it and says where it is by itself.
 
 Both traces share one normalised amplitude axis (±1.0 full scale), which is
 legitimate because carrier and sidechain are both full-scale audio.
 
-**Layer order** follows Figma and is not the obvious one: zero line, then the
-floor band, then the traces, then the lid bands over the top. Drawing the lid
-bands first instead loses the tint where a trace crosses into the clamped
-region, which is the one place the overlay says something.
+**The sidechain is drawn only where it is doing something.** Its cyan runs
+through a vertical gradient whose stops sit on the thresholds: solid outside
+±CEILING, fading through the window, and fully transparent inside ±FLOOR. So the
+trace reports its own relevance without needing the bands drawn, which is what
+lets the resting state carry no overlay at all. At INSTANT the floor stops
+collapse together and the fade simply runs to the zero crossing.
+
+JUCE fills a stroke from a gradient as readily as it fills a shape, so this and
+the greyed outline below are both a `ColourGradient` and a `strokePath` rather
+than anything cleverer — which is what the Figma annotation asks for when it says
+it built the effect by hand and to "do this in the easiest programmatic way".
+
+**Layer order** follows Figma: traces first, then the ceiling bands, then the
+floor band over the top. Drawing the bands underneath instead loses the tint
+where a trace crosses into the clamped region, which is the one place the
+overlay is telling you something.
 
 **Thresholds** are derived in the editor from the parameters, not mirrored out
 of the engine. The engine only refreshes its copy inside `processBlock`, so in a
@@ -281,19 +296,26 @@ with the answer.
 
 | state | shown |
 |---|---|
-| at rest | sidechain, lid and output |
-| pointing at CEILING, FLOOR or the scope | ... plus the ceiling and floor bands |
-| dragging CEILING or FLOOR | bands, sidechain and lid — **no output** |
+| at rest | the lid aperture, the sidechain as a line, the output |
+| pointing at or dragging CEILING or FLOOR, or over the scope | the sidechain as a filled body, the ceiling and floor bands, the output at 10% — **no lid** |
 | dragging SHAPE | the SHAPE curve alone; no audio, no bands, no CLIP |
 
-Dropping the output while a threshold is moving is the point of the reference
-state: setting a threshold is a question about where the *sidechain* sits against
-the bands, and the output crosses the same ground answering a different one.
+There are two audio states, not three. Hovering a threshold control and dragging
+it show the same thing, because that state already answers both questions: the
+sidechain fills out into a solid body against the bands, and everything else
+steps back rather than being removed. The output drops to a 10% ghost — enough to
+keep the context, not enough to compete — and the lid aperture goes entirely,
+since the question being asked is about the sidechain's level and the aperture is
+about what happened to the carrier.
+
+The sidechain's outline also **greys out where it passes inside the floor band**,
+where the lid is wide open and the level is not doing anything. That is one more
+`ColourGradient` on the stroke, with its stops on ±FLOOR.
 
 The SHAPE curve replaces the scope rather than overlaying it, because a transfer
 curve and a waveform share an axis and mean different things by it. Only the
-wordmark and the gear carry over; the centre line goes with the rest, since
-nothing on this plot is bipolar.
+wordmark and the gear carry over — CLIP goes with the rest, since it belongs to
+the scope's frame rather than to the curve standing in for it.
 
 It is drawn on a **centred square**, x being how far the detector has crossed the
 FLOOR→CEILING window and y how far the lid has closed by then. The square is the

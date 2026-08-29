@@ -38,8 +38,9 @@ namespace hccolour
     const juce::Colour idle        { 0xff3a4552 }; // a dial whose parameter is off
     const juce::Colour clipOn      { 0xfff85050 };
     const juce::Colour clipBorder  { 0xffe73131 };
-    const juce::Colour scopeLine   { 0xff202932 }; // the scope's zero line
     const juce::Colour output      { 0xffdfdfdf }; // the post-lid trace
+    const juce::Colour belowFloor  { 0xff9e9e9e }; // sidechain where it is under
+                                                   // the floor, doing nothing
 }
 
 //==============================================================================
@@ -257,10 +258,10 @@ class ScopeComponent final : public juce::Component
 public:
     enum class Overlay
     {
-        traces,     // at rest: sidechain, lid and output, no thresholds
-        thresholds, // pointing at a threshold control, or at the scope itself
-        reference,  // dragging one: sidechain and lid only, so the bands have
-                    // something unambiguous to be read against
+        traces,     // at rest: the lid aperture, the sidechain and the output
+        thresholds, // pointing at or dragging a threshold control, or over the
+                    // scope itself: the sidechain fills out and everything else
+                    // gets out of its way, against the ceiling and floor bands
         shape       // dragging SHAPE: the curve alone, no audio at all
     };
 
