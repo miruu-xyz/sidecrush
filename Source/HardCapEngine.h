@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 // HardCap DSP core.
@@ -28,7 +29,8 @@ public:
     {
         // SHAPE has a 0.01 step, so anything smaller is not worth a rebuild --
         // and an exact float compare here trips -Wfloat-equal for no benefit.
-        if (built && std::fabs (shape - currentShape) < 1.0e-6f)
+        // currentShape starts outside SHAPE's range, so the first call always builds.
+        if (std::fabs (shape - currentShape) < 1.0e-6f)
             return;
 
         currentShape = shape;
@@ -36,8 +38,6 @@ public:
 
         for (int i = 0; i <= size; ++i)
             table[(size_t) i] = 1.0f - std::pow ((float) i / (float) size, p);
-
-        built = true;
     }
 
     // t in [0,1] -> lid in [0,1]. 0 = wide open, 1 = fully shut.
@@ -56,7 +56,6 @@ public:
 private:
     std::array<float, (size_t) size + 1> table {};
     float currentShape = 1.0e9f;
-    bool built = false;
 };
 
 //==============================================================================
@@ -116,6 +115,20 @@ public:
     void setup (float cutoffHz, int poles, double sampleRate) noexcept
     {
         poles = std::clamp (poles, 1, maxPoles);
+
+        // A tan and up to four sins, so skip it when nothing moved -- the same
+        // guard ShapeTable uses one screen up. lastPoles starts at 0, which poles
+        // can never be, so the first call always builds. FILTER has a 1 Hz step,
+        // so a millihertz of tolerance costs nothing.
+        if (poles == lastPoles
+            && std::fabs (cutoffHz - lastCutoffHz) < 1.0e-3f
+            && std::fabs (sampleRate - lastSampleRate) < 1.0e-9)
+            return;
+
+        lastPoles = poles;
+        lastCutoffHz = cutoffHz;
+        lastSampleRate = sampleRate;
+
         const auto nyquistLimit = (float) sampleRate * 0.45f;
 
         bypassed = (cutoffHz <= 0.0f || cutoffHz >= nyquistLimit);
@@ -123,7 +136,7 @@ public:
         if (bypassed)
             return;
 
-        const auto g = std::tan (3.14159265358979f * cutoffHz / (float) sampleRate);
+        const auto g = std::tan (std::numbers::pi_v<float> * cutoffHz / (float) sampleRate);
 
         numSections = poles / 2;
         useOnePole = (poles % 2) != 0;
@@ -131,7 +144,7 @@ public:
         for (int k = 0; k < numSections; ++k)
         {
             // Q_k = 1 / (2 sin(pi(2k+1) / 2N)) -- standard Butterworth section Qs.
-            const auto q = 1.0f / (2.0f * std::sin (3.14159265358979f * (float) (2 * k + 1)
+            const auto q = 1.0f / (2.0f * std::sin (std::numbers::pi_v<float> * (float) (2 * k + 1)
                                                     / (float) (2 * poles)));
             sections[(size_t) k].setCoefficients (g, q);
         }
@@ -168,6 +181,12 @@ private:
     int numSections = 0;
     bool useOnePole = false;
     bool bypassed = true;
+
+    // Last configuration built, so an unchanged setup() is free. reset() clears
+    // the filter state but deliberately not these -- the coefficients still stand.
+    float lastCutoffHz = 0.0f;
+    double lastSampleRate = 0.0;
+    int lastPoles = 0;
 };
 
 //==============================================================================
@@ -182,19 +201,6 @@ struct Params
     int poles = 2;             // 1..8
     bool clip = true;          // true = clip ceiling, false = VCA multiply
     bool filterPost = false;   // rectifier order
-
-    // setParams() re-derives filter coefficients (a tan and four sins per
-    // channel), so the processor skips it when the block changed nothing.
-    // Exact equality is the point here: this asks "did the host hand us the
-    // identical bits again", not "are these two settings musically alike".
-#if defined (__clang__) || defined (__GNUC__)
- #pragma GCC diagnostic push
- #pragma GCC diagnostic ignored "-Wfloat-equal"
-#endif
-    bool operator== (const Params&) const = default;
-#if defined (__clang__) || defined (__GNUC__)
- #pragma GCC diagnostic pop
-#endif
 };
 
 class Engine

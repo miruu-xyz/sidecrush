@@ -47,23 +47,22 @@ public:
 // Cyan filtered sidechain, blue/red threshold lines, a grey aperture that
 // closes in from top and bottom, and the white output squashing against it.
 // SPEC 5.1.
-class ScopeComponent final : public juce::Component,
-                             private juce::Timer
+class ScopeComponent final : public juce::Component
 {
 public:
     explicit ScopeComponent (HardCapProcessor&);
 
     void paint (juce::Graphics&) override;
+    void refresh();
 
 private:
-    void timerCallback() override;
-
     HardCapProcessor& processor;
     int64_t snapshotHead = 0;
 };
 
 //==============================================================================
-class HardCapEditor final : public juce::AudioProcessorEditor
+class HardCapEditor final : public juce::AudioProcessorEditor,
+                            private juce::Timer
 {
 public:
     explicit HardCapEditor (HardCapProcessor&);
@@ -73,14 +72,15 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
+
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    juce::Slider& addSlider (juce::Slider::SliderStyle, const juce::String& paramId,
-                             std::unique_ptr<SliderAttachment>&);
-    juce::ComboBox& addCombo (const juce::String& paramId,
-                              std::unique_ptr<ComboAttachment>&);
+    void add (juce::Slider&, juce::Slider::SliderStyle, const char* paramId,
+              std::unique_ptr<SliderAttachment>&);
+    void add (juce::ComboBox&, const char* paramId, std::unique_ptr<ComboAttachment>&);
 
     HardCapProcessor& proc;
     HardCapLookAndFeel lookAndFeel;
@@ -95,20 +95,22 @@ private:
     std::unique_ptr<ButtonAttachment> clipAtt;
 
     // The LED beside CEILING tracks instantaneous gain reduction (SPEC 5.2).
-    class ActivityLed final : public juce::Component, private juce::Timer
+    class ActivityLed final : public juce::Component
     {
     public:
         explicit ActivityLed (HardCapProcessor&);
         void paint (juce::Graphics&) override;
+        void refresh();
 
     private:
-        void timerCallback() override;
-
         HardCapProcessor& processor;
         float level = 0.0f;
     };
 
     ActivityLed led;
+
+    // The FILTER readout relabels itself in POST, and nothing else repaints it.
+    bool lastFilterPost = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardCapEditor)
 };

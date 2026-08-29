@@ -102,28 +102,20 @@ add_test(NAME host COMMAND hardcap_host_test)
 #
 # bench  -- where the CPU goes, HQ on vs off, and the HQ switch's continuity.
 # alias  -- what each oversampling factor and filter choice is actually buying.
-juce_add_console_app(hardcap_bench PRODUCT_NAME "hardcap_bench")
+foreach(tool bench alias)
+    juce_add_console_app(hardcap_${tool} PRODUCT_NAME "hardcap_${tool}")
 
-target_sources(hardcap_bench PRIVATE tests/bench.cpp)
+    target_sources(hardcap_${tool} PRIVATE tests/${tool}.cpp)
 
-target_link_libraries(hardcap_bench PRIVATE
-    HardCap
-    juce::juce_audio_utils
-    juce::juce_dsp
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_warning_flags)
+    target_link_libraries(hardcap_${tool} PRIVATE
+        HardCap
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
 
-target_compile_options(hardcap_bench PRIVATE
-    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
+    target_compile_options(hardcap_${tool} PRIVATE
+        $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
 
-# Aliasing measurement, same deal -- build and run by hand.
-juce_add_console_app(hardcap_alias PRODUCT_NAME "hardcap_alias")
-target_sources(hardcap_alias PRIVATE tests/alias.cpp)
-target_link_libraries(hardcap_alias PRIVATE
-    HardCap juce::juce_audio_utils juce::juce_dsp
-    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
-target_compile_options(hardcap_alias PRIVATE
-    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
-
-set_target_properties(hardcap_bench hardcap_alias PROPERTIES EXCLUDE_FROM_ALL TRUE)
-
+    set_target_properties(hardcap_${tool} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+endforeach()

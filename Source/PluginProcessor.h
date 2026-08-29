@@ -6,6 +6,25 @@
 #include "HardCapEngine.h"
 
 //==============================================================================
+// Shared with the editor: a parameter id is a pairing between two files, and a
+// constant only keeps them in sync if both halves actually use it.
+namespace ids
+{
+    constexpr auto pre       = "pre";
+    constexpr auto ceiling   = "ceiling";
+    constexpr auto floorDb   = "floor";
+    constexpr auto shape     = "shape";
+    constexpr auto filterHz  = "filter";
+    constexpr auto slope     = "slope";
+    constexpr auto output    = "output";
+    constexpr auto clip      = "clip";
+    constexpr auto filterPos = "filterpos";
+    constexpr auto scLink    = "sclink";
+    constexpr auto scSource  = "scsource";
+    constexpr auto hq        = "hq";
+}
+
+//==============================================================================
 struct ScopeFrame
 {
     float sc = 0.0f;   // filtered sidechain, the signal the thresholds measure
@@ -75,9 +94,17 @@ public:
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout (
+        std::atomic<bool>* filterIsPostFlag);
 
-    juce::AudioProcessorValueTreeState apvts { *this, nullptr, "HARDCAP", createParameterLayout() };
+    // In POST the FILTER knob is a release time, not a frequency, and the
+    // parameter's own text function has to say so -- SPEC 4.3. Declared before
+    // apvts on purpose: members are destroyed in reverse, so the parameters
+    // holding this pointer are gone before it is.
+    std::atomic<bool> filterIsPost { false };
+
+    juce::AudioProcessorValueTreeState apvts { *this, nullptr, "HARDCAP",
+                                               createParameterLayout (&filterIsPost) };
     ScopeFifo scope;
 
     // Read by the editor to draw the threshold lines on the same axis as the trace.
@@ -108,8 +135,23 @@ private:
 
     void pullParameters();
 
+    // Cached once in the constructor. getRawParameterValue walks a std::map with
+    // string comparisons, and these pointers never move after apvts is built.
+    struct Raw
+    {
+        std::atomic<float>* pre, *ceiling, *floorDb, *shape, *filterHz, *slope,
+                          *output, *clip, *filterPos, *scLink, *scSource, *hq;
+    };
+
+    Raw raw {};
+
     hardcap::Engine engine;
     juce::AudioBuffer<float> detector;
+
+    // sc and lid are known inside the oversampled loop, but the output only
+    // exists after the downsampler, the pad and the duck -- so the frames are
+    // staged here and pushed once all three have run.
+    std::vector<ScopeFrame> pendingScope;
 
     // Both configurations are built up front so that toggling HQ never allocates
     // on the audio thread.
@@ -136,11 +178,6 @@ private:
     // old path produced -- coming back up before that flushes splices the two
     // together, which is the very click the duck exists to hide.
     int switchHold = 0;
-
-    // Last values pushed to the engine, so an unchanged block skips the
-    // coefficient maths entirely.
-    hardcap::Params lastParams;
-    bool haveLastParams = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardCapProcessor)
 };

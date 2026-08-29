@@ -3,22 +3,11 @@
 // stops being true. Build and run it: it prints nothing and exits 0 on success.
 
 #include "HardCapEngine.h"
+#include "check.h"
 
 #include <cmath>
 #include <cstdio>
-#include <vector>
-#include <cstdlib>
-
-// assert() vanishes under NDEBUG, which every Release build sets -- a self-check
-// that disappears in the configuration people actually ship is worse than none.
-#define CHECK(cond)                                                                    \
-    do {                                                                               \
-        if (! (cond))                                                                  \
-        {                                                                              \
-            std::fprintf (stderr, "FAILED  %s:%d\n        %s\n", __FILE__, __LINE__, #cond); \
-            std::abort();                                                              \
-        }                                                                              \
-    } while (false)
+#include <numbers>
 
 using namespace hardcap;
 
@@ -29,18 +18,13 @@ constexpr float tol = 1.0e-4f;
 
 bool near (float a, float b, float t = tol) { return std::fabs (a - b) <= t; }
 
+// Everything not named here is Params' own default, which the tests then
+// exercise as a side effect of using them.
 Params baseParams()
 {
     Params p;
-    p.preGain = 1.0f;
-    p.outGain = 1.0f;
     p.ceilingLin = 1.0f;
-    p.floorLin = 0.0f;
-    p.shape = 0.0f;
-    p.filterHz = 0.0f; // bypassed
-    p.poles = 2;
     p.clip = false;
-    p.filterPost = false;
     return p;
 }
 
@@ -163,7 +147,7 @@ void rectifierGivesTwoClosuresPerCycle()
 
     for (int i = 0; i < samplesPerCycle; ++i)
     {
-        const auto sc = (float) std::sin (2.0 * 3.14159265358979 * freq * i / sr);
+        const auto sc = (float) std::sin (2.0 * std::numbers::pi * freq * i / sr);
         e.processSample (0, 1.0f, sc);
         const auto shut = e.lastLid (0) < 0.4f;
 
@@ -198,7 +182,7 @@ void filterIsAStableLowpass()
         float peak = 0.0f;
         for (int i = 0; i < 20000; ++i)
         {
-            const auto x = (float) std::sin (2.0 * 3.14159265358979 * 5000.0 * i / 48000.0);
+            const auto x = (float) std::sin (2.0 * std::numbers::pi * 5000.0 * i / 48000.0);
             const auto y = f.process (x);
 
             if (i > 10000)
@@ -216,7 +200,7 @@ void filterIsAStableLowpass()
 
     for (int i = 0; i < 200000; ++i)
     {
-        const auto y = deep.process ((float) std::sin (2.0 * 3.14159265358979 * 1000.0 * i / 44100.0));
+        const auto y = deep.process ((float) std::sin (2.0 * std::numbers::pi * 1000.0 * i / 44100.0));
         CHECK (std::isfinite (y));
         CHECK (std::fabs (y) < 10.0f);
     }

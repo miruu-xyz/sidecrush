@@ -87,7 +87,7 @@ Notes:
 - **PRE and OUTPUT share a range** so the pair is not confusing to read.
 - **CEILING turns conventionally**: clockwise = higher dBFS = gentler. Counter-clockwise lowers the ceiling.
 - 20 kHz is the top of the FILTER sweep because Nyquist at 48 kHz is 24 kHz. Above ~20 kHz the filter does nothing, so the top of the sweep *is* the off position.
-- Smoothing (~10–20 ms) on PRE, OUTPUT, CEILING, FLOOR and SHAPE to avoid zipper noise. **Never** on the lid path.
+- **No parameter smoothing anywhere.** Not on the lid path, and — deliberately, unlike most plugins — not on PRE, OUTPUT, CEILING, FLOOR or SHAPE either. Every parameter is read once per block and applied as a step. The usual 10–20 ms ramp exists to hide zipper noise; here that noise is the point. A hard automation lane on PRE or CEILING should sound *yanked*, not eased, and the block-rate stepping is part of what makes a fast sweep sound like something breaking rather than something fading. Smoothing would sand off exactly the roughness this plugin exists to produce. The host's buffer size is the only knob that changes how coarse the steps are, and that is the user's call.
 
 ---
 
@@ -222,4 +222,5 @@ Both traces share one normalised amplitude axis (±1.0 full scale), which is leg
 | CROSS sidechain routing (L↔R) | MONO+CROSS collapses to INT — a dead option in a four-way matrix | never, unless SC LINK is redesigned |
 | Auto-makeup gain | fights the effect; the whole point is that the output ducks | never |
 | Preset browser | real chunk of undesigned UI | if `.vstpreset` files prove insufficient |
+| Parameter smoothing | ramps sand off the roughness; step-per-block on PRE and CEILING is the character, not a defect | never |
 | mono → stereo bus layout | doubles the matrix for nothing | if a user actually asks |

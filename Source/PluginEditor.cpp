@@ -110,14 +110,9 @@ void HardCapLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
 }
 
 //==============================================================================
-ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p)
-{
-    // 30 is plenty for a scope and costs half of 60. This timer runs for as long
-    // as the editor is open, whether or not the host is playing anything.
-    startTimerHz (30);
-}
+ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p) {}
 
-void ScopeComponent::timerCallback()
+void ScopeComponent::refresh()
 {
     snapshotHead = processor.scope.head();
     repaint();
@@ -138,15 +133,29 @@ void ScopeComponent::paint (juce::Graphics& g)
     if (head < 512)
         return;
 
-    // ---- trigger: most recent rising zero crossing of the sidechain -------
+    // ---- trigger: most recent rising crossing of the trace's own mean ----
+    // In PRE the detector is bipolar and the mean is ~0, i.e. a zero crossing.
+    // In POST it is a rectified envelope that never goes negative, so a zero
+    // crossing could only ever fire where the clamp bottomed out -- the display
+    // would free-run instead of latching. The mean is the level that works for
+    // both.
     const auto maxScan = (int64_t) juce::jmin (ScopeFifo::capacity - 8, 12000);
+    const auto scanFrom = juce::jmax<int64_t> (2, head - maxScan);
+
+    auto sum = 0.0;
+
+    for (int64_t i = scanFrom; i < head; ++i)
+        sum += (double) fifo.at (i).sc;
+
+    const auto level = (float) (sum / (double) juce::jmax<int64_t> (1, head - scanFrom));
+
     int64_t trigger = head - 1;
     int64_t previous = -1;
     int found = 0;
 
-    for (int64_t i = head - 2; i > head - maxScan && i > 1; --i)
+    for (int64_t i = head - 2; i > scanFrom; --i)
     {
-        if (fifo.at (i - 1).sc <= 0.0f && fifo.at (i).sc > 0.0f)
+        if (fifo.at (i - 1).sc <= level && fifo.at (i).sc > level)
         {
             if (found == 0) trigger = i;
             else { previous = i; break; }
@@ -241,12 +250,9 @@ void ScopeComponent::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-HardCapEditor::ActivityLed::ActivityLed (HardCapProcessor& p) : processor (p)
-{
-    startTimerHz (30);
-}
+HardCapEditor::ActivityLed::ActivityLed (HardCapProcessor& p) : processor (p) {}
 
-void HardCapEditor::ActivityLed::timerCallback()
+void HardCapEditor::ActivityLed::refresh()
 {
     const auto target = processor.gainReduction.load (std::memory_order_relaxed);
     level = juce::jmax (target, level * 0.72f); // fast attack, visible decay
@@ -266,26 +272,50 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 {
     setLookAndFeel (&lookAndFeel);
 
-    addSlider (juce::Slider::LinearVertical, "pre", preAtt);
-    addSlider (juce::Slider::LinearVertical, "output", outputAtt);
-    addSlider (juce::Slider::RotaryVerticalDrag, "ceiling", ceilingAtt);
-    addSlider (juce::Slider::RotaryVerticalDrag, "filter", filterAtt);
-    addSlider (juce::Slider::RotaryVerticalDrag, "shape", shapeAtt);
-    addSlider (juce::Slider::LinearBar, "floor", floorAtt);
+    add (preSlider,    juce::Slider::LinearVertical,     ids::pre,       preAtt);
+    add (outputSlider, juce::Slider::LinearVertical,     ids::output,    outputAtt);
+    add (ceilingKnob,  juce::Slider::RotaryVerticalDrag, ids::ceiling,   ceilingAtt);
+    add (filterKnob,   juce::Slider::RotaryVerticalDrag, ids::filterHz,  filterAtt);
+    add (shapeKnob,    juce::Slider::RotaryVerticalDrag, ids::shape,     shapeAtt);
+    add (floorField,   juce::Slider::LinearBar,          ids::floorDb,   floorAtt);
 
-    addCombo ("slope", slopeAtt);
-    addCombo ("filterpos", filterPosAtt);
-    addCombo ("sclink", scLinkAtt);
-    addCombo ("scsource", scSourceAtt);
+    add (slopeBox,     ids::slope,     slopeAtt);
+    add (filterPosBox, ids::filterPos, filterPosAtt);
+    add (scLinkBox,    ids::scLink,    scLinkAtt);
+    add (scSourceBox,  ids::scSource,  scSourceAtt);
 
     clipButton.setClickingTogglesState (true);
     addAndMakeVisible (clipButton);
-    clipAtt = std::make_unique<ButtonAttachment> (proc.apvts, "clip", clipButton);
+    clipAtt = std::make_unique<ButtonAttachment> (proc.apvts, ids::clip, clipButton);
 
     addAndMakeVisible (scope);
     addAndMakeVisible (led);
 
     setSize (880, 340);
+
+    // One timer for both animated children. 30 is plenty for a scope and costs
+    // half of 60; it runs for as long as the editor is open, whether or not the
+    // host is playing anything.
+    lastFilterPost = proc.filterIsPost.load (std::memory_order_relaxed);
+    startTimerHz (30);
+}
+
+void HardCapEditor::timerCallback()
+{
+    scope.refresh();
+    led.refresh();
+
+    // The FILTER text function reads this flag, so the readout only changes when
+    // something asks the slider to rebuild its text. Written from here as well as
+    // from the audio thread: same value either way, and this path still works in
+    // a host that is not currently processing.
+    if (const auto post = proc.apvts.getRawParameterValue (ids::filterPos)->load() > 0.5f;
+        post != lastFilterPost)
+    {
+        lastFilterPost = post;
+        proc.filterIsPost.store (post, std::memory_order_relaxed);
+        filterKnob.updateText();
+    }
 }
 
 HardCapEditor::~HardCapEditor()
@@ -339,41 +369,20 @@ void HardCapEditor::resized()
     scSourceBox.setBounds (row.removeFromLeft (60));
 }
 
-juce::Slider& HardCapEditor::addSlider (juce::Slider::SliderStyle style,
-                                        const juce::String& paramId,
-                                        std::unique_ptr<SliderAttachment>& attachment)
+void HardCapEditor::add (juce::Slider& slider, juce::Slider::SliderStyle style,
+                         const char* paramId, std::unique_ptr<SliderAttachment>& attachment)
 {
-    juce::Slider* target = nullptr;
-
-    if (paramId == "pre")          target = &preSlider;
-    else if (paramId == "output")  target = &outputSlider;
-    else if (paramId == "ceiling") target = &ceilingKnob;
-    else if (paramId == "filter")  target = &filterKnob;
-    else if (paramId == "shape")   target = &shapeKnob;
-    else                           target = &floorField;
-
-    target->setSliderStyle (style);
-    target->setTextBoxStyle (style == juce::Slider::LinearBar ? juce::Slider::NoTextBox
-                                                             : juce::Slider::TextBoxBelow,
-                             true, 92, 18);
-    addAndMakeVisible (*target);
-    attachment = std::make_unique<SliderAttachment> (proc.apvts, paramId, *target);
-
-    return *target;
+    slider.setSliderStyle (style);
+    slider.setTextBoxStyle (style == juce::Slider::LinearBar ? juce::Slider::NoTextBox
+                                                            : juce::Slider::TextBoxBelow,
+                            true, 92, 18);
+    addAndMakeVisible (slider);
+    attachment = std::make_unique<SliderAttachment> (proc.apvts, paramId, slider);
 }
 
-juce::ComboBox& HardCapEditor::addCombo (const juce::String& paramId,
-                                         std::unique_ptr<ComboAttachment>& attachment)
+void HardCapEditor::add (juce::ComboBox& box, const char* paramId,
+                         std::unique_ptr<ComboAttachment>& attachment)
 {
-    juce::ComboBox* target = nullptr;
-
-    if (paramId == "slope")          target = &slopeBox;
-    else if (paramId == "filterpos") target = &filterPosBox;
-    else if (paramId == "sclink")    target = &scLinkBox;
-    else                             target = &scSourceBox;
-
-    addAndMakeVisible (*target);
-    attachment = std::make_unique<ComboAttachment> (proc.apvts, paramId, *target);
-
-    return *target;
+    addAndMakeVisible (box);
+    attachment = std::make_unique<ComboAttachment> (proc.apvts, paramId, box);
 }

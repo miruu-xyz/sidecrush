@@ -1,29 +1,14 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-namespace ids
-{
-    constexpr auto pre       = "pre";
-    constexpr auto ceiling   = "ceiling";
-    constexpr auto floorDb   = "floor";
-    constexpr auto shape     = "shape";
-    constexpr auto filterHz  = "filter";
-    constexpr auto slope     = "slope";
-    constexpr auto output    = "output";
-    constexpr auto clip      = "clip";
-    constexpr auto filterPos = "filterpos";
-    constexpr auto scLink    = "sclink";
-    constexpr auto scSource  = "scsource";
-    constexpr auto hq        = "hq";
-}
-
 // The FILTER sweep tops out at 20 kHz and the top detent is OFF: Nyquist at
 // 48 kHz is 24 kHz, so above ~20 kHz the filter is doing nothing anyway.
 static constexpr float filterOffHz = 20000.0f;
 static constexpr float floorOffDb = -60.0f;
 
 //==============================================================================
-juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createParameterLayout (
+    std::atomic<bool>* filterIsPostFlag)
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
@@ -57,9 +42,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::filterHz, 1 }, "Filter", filterRange, filterOffHz,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (
-            [] (float v, int)
+            [filterIsPostFlag] (float v, int)
             {
                 if (v >= filterOffHz - 1.0f) return String ("OFF");
+
+                // In POST the filter sits after the rectifier, so the knob is an
+                // envelope release, not a frequency -- SPEC 4.3 asks the readout
+                // to say which. tau = 1 / (2 pi fc): 20 Hz reads as ~8 ms.
+                if (filterIsPostFlag->load (std::memory_order_relaxed))
+                    return String (1000.0f / (MathConstants<float>::twoPi * v), 2) + " ms";
+
                 return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz"
                                     : String (roundToInt (v)) + " Hz";
             })));
@@ -103,6 +95,12 @@ HardCapProcessor::HardCapProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                           .withInput ("Sidechain", juce::AudioChannelSet::stereo(), true))
 {
+    const auto get = [this] (const char* id) { return apvts.getRawParameterValue (id); };
+
+    raw = { get (ids::pre),       get (ids::ceiling),   get (ids::floorDb),
+            get (ids::shape),     get (ids::filterHz),  get (ids::slope),
+            get (ids::output),    get (ids::clip),      get (ids::filterPos),
+            get (ids::scLink),    get (ids::scSource),  get (ids::hq) };
 }
 
 bool HardCapProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -132,6 +130,8 @@ void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     detector.setSize (numCh, maximumExpectedSamplesPerBlock, false, true, false);
     detector.clear();
 
+    pendingScope.assign ((size_t) juce::jmax (1, maximumExpectedSamplesPerBlock), ScopeFrame {});
+
     using OS = juce::dsp::Oversampling<float>;
 
     const auto build = [&] (int log2Factor, OS::FilterType type)
@@ -156,11 +156,14 @@ void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     ecoPad.prepare (spec);
     ecoPad.reset();
 
+    // All of it, not just the gain: a hold left over from a switch that was
+    // still in flight when the host re-prepared would duck the first few
+    // milliseconds of the new configuration for no reason.
     switchGain = 1.0f;
+    switchHold = 0;
     switchRampStep = 1.0f / juce::jmax (1.0f, 0.004f * (float) sampleRate); // ~4 ms
-    lastHq = apvts.getRawParameterValue (ids::hq)->load() > 0.5f;
+    lastHq = raw.hq->load() > 0.5f;
     engine.prepare (sampleRate * (lastHq ? hqFactor : ecoFactor), numCh);
-    haveLastParams = false;
 
     // Within either mode the detector oversampler only ever runs its up path, so
     // its group delay matches the carrier's up path and the two stay aligned.
@@ -172,33 +175,29 @@ void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
 
 void HardCapProcessor::pullParameters()
 {
-    const auto raw = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
-
     hardcap::Params p;
-    p.preGain = juce::Decibels::decibelsToGain (raw (ids::pre));
-    p.outGain = juce::Decibels::decibelsToGain (raw (ids::output));
-    p.ceilingLin = juce::Decibels::decibelsToGain (raw (ids::ceiling));
+    p.preGain = juce::Decibels::decibelsToGain (raw.pre->load());
+    p.outGain = juce::Decibels::decibelsToGain (raw.output->load());
+    p.ceilingLin = juce::Decibels::decibelsToGain (raw.ceiling->load());
 
-    const auto floorDb = raw (ids::floorDb);
+    const auto floorDb = raw.floorDb->load();
     p.floorLin = floorDb <= floorOffDb ? 0.0f : juce::Decibels::decibelsToGain (floorDb);
 
-    p.shape = raw (ids::shape);
+    p.shape = raw.shape->load();
 
-    const auto hz = raw (ids::filterHz);
+    const auto hz = raw.filterHz->load();
     p.filterHz = hz >= filterOffHz - 1.0f ? 0.0f : hz;
-    p.poles = (int) raw (ids::slope) + 1;
+    p.poles = (int) raw.slope->load() + 1;
 
-    p.clip = raw (ids::clip) > 0.5f;
-    p.filterPost = raw (ids::filterPos) > 0.5f;
+    p.clip = raw.clip->load() > 0.5f;
+    p.filterPost = raw.filterPos->load() > 0.5f;
 
-    if (haveLastParams && p == lastParams)
-        return;
-
-    lastParams = p;
-    haveLastParams = true;
-
+    // Applied every block, no smoothing and no change detection -- SPEC 2. The
+    // only part worth guarding is the filter's tan and sins, and DetectorFilter
+    // guards that itself.
     engine.setParams (p);
 
+    filterIsPost.store (p.filterPost, std::memory_order_relaxed);
     ceilingLinear.store (engine.getParams().ceilingLin, std::memory_order_relaxed);
     floorLinear.store (engine.getParams().floorLin, std::memory_order_relaxed);
 }
@@ -229,7 +228,7 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     // ---- HQ ---------------------------------------------------------------
     // The swap only happens once the duck has reached silence, and only on a
     // block boundary. Toggling back before then simply cancels the duck.
-    const auto hq = apvts.getRawParameterValue (ids::hq)->load() > 0.5f;
+    const auto hq = raw.hq->load() > 0.5f;
 
     if (hq != lastHq && switchGain <= 0.0f)
     {
@@ -250,8 +249,8 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     auto& carrierOs = lastHq ? *carrierOsHq : *carrierOsEco;
     auto& detectorOs = lastHq ? *detectorOsHq : *detectorOsEco;
 
-    const auto useInternal = apvts.getRawParameterValue (ids::scSource)->load() > 0.5f;
-    const auto sumToMono = apvts.getRawParameterValue (ids::scLink)->load() < 0.5f;
+    const auto useInternal = raw.scSource->load() > 0.5f;
+    const auto sumToMono = raw.scLink->load() < 0.5f;
 
     // ---- build the detector source ---------------------------------------
     const auto scChannels = useInternal ? numCh : sidechain.getNumChannels();
@@ -284,19 +283,19 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         }
 
         const auto& src = useInternal ? main : sidechain;
-        const auto* a = src.getReadPointer (juce::jmin (ch, scChannels - 1));
 
         if (sumToMono && scChannels > 1)
         {
-            const auto* b = src.getReadPointer (1);
-            const auto* first = src.getReadPointer (0);
+            const auto* l = src.getReadPointer (0);
+            const auto* r = src.getReadPointer (1);
 
             for (int i = 0; i < numSamples; ++i)
-                dst[i] = 0.5f * (first[i] + b[i]);
+                dst[i] = 0.5f * (l[i] + r[i]);
         }
         else
         {
-            juce::FloatVectorOperations::copy (dst, a, numSamples);
+            juce::FloatVectorOperations::copy (
+                dst, src.getReadPointer (juce::jmin (ch, scChannels - 1)), numSamples);
         }
     }
 
@@ -343,10 +342,13 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         blockLidMin = juce::jmin (blockLidMin, lid);
 
         // One scope frame per base-rate sample, taking the most closed lid of
-        // the group so the aperture never looks wider than it really was.
+        // the group so the aperture never looks wider than it really was. `out`
+        // is filled in after the downsampler: picking every factor-th sample out
+        // of this buffer would fold the clipper's own harmonics into the trace
+        // and draw aliasing the real output does not have.
         if ((i % (size_t) factor) == (size_t) factor - 1)
         {
-            scope.push ({ engine.lastDetector (0), lidMin, carrierPtr[0][i] });
+            pendingScope[i / (size_t) factor] = { engine.lastDetector (0), lidMin, 0.0f };
             lidMin = 1.0f;
         }
     }
@@ -387,6 +389,16 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     switchGain = gainAfterBlock;
     switchHold = holdAfterBlock;
+
+    // Now the trace really is what the host receives -- downsampled, padded and
+    // ducked, all three of which happened above.
+    const auto* finished = main.getReadPointer (0);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        pendingScope[(size_t) i].out = finished[i];
+        scope.push (pendingScope[(size_t) i]);
+    }
 
     gainReduction.store (1.0f - blockLidMin, std::memory_order_relaxed);
 

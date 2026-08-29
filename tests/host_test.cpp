@@ -4,25 +4,24 @@
 // escaping into the output.
 
 #include "../Source/PluginProcessor.h"
+#include "check.h"
 
 #include <cstdio>
 #include <utility>
 #include <random>
-#include <cstdlib>
-
-// assert() vanishes under NDEBUG, which every Release build sets -- a self-check
-// that disappears in the configuration people actually ship is worse than none.
-#define CHECK(cond)                                                                    \
-    do {                                                                               \
-        if (! (cond))                                                                  \
-        {                                                                              \
-            std::fprintf (stderr, "FAILED  %s:%d\n        %s\n", __FILE__, __LINE__, #cond); \
-            std::abort();                                                              \
-        }                                                                              \
-    } while (false)
 
 namespace
 {
+
+// Stereo in, stereo sidechain, stereo out -- what most of these tests want.
+juce::AudioProcessor::BusesLayout stereoLayout()
+{
+    juce::AudioProcessor::BusesLayout layout;
+    layout.inputBuses.add (juce::AudioChannelSet::stereo());
+    layout.inputBuses.add (juce::AudioChannelSet::stereo());
+    layout.outputBuses.add (juce::AudioChannelSet::stereo());
+    return layout;
+}
 
 bool allFinite (const juce::AudioBuffer<float>& b, int numChannels, int numSamples)
 {
@@ -102,12 +101,7 @@ void shortcutsAreExact()
     const auto render = [] (bool internalSource, bool monoLink, bool preSummed)
     {
         HardCapProcessor p;
-
-        juce::AudioProcessor::BusesLayout layout;
-        layout.inputBuses.add (juce::AudioChannelSet::stereo());
-        layout.inputBuses.add (juce::AudioChannelSet::stereo());
-        layout.outputBuses.add (juce::AudioChannelSet::stereo());
-        CHECK (p.setBusesLayout (layout));
+        CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, blockSize);
 
@@ -181,12 +175,7 @@ void hqLatencyIsConstant()
     const auto peakOffset = [] (bool hq)
     {
         HardCapProcessor p;
-
-        juce::AudioProcessor::BusesLayout layout;
-        layout.inputBuses.add (juce::AudioChannelSet::stereo());
-        layout.inputBuses.add (juce::AudioChannelSet::stereo());
-        layout.outputBuses.add (juce::AudioChannelSet::stereo());
-        CHECK (p.setBusesLayout (layout));
+        CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, blockSize);
         p.apvts.getParameter ("hq")->setValueNotifyingHost (hq ? 1.0f : 0.0f);
@@ -195,6 +184,29 @@ void hqLatencyIsConstant()
 
         juce::AudioBuffer<float> buffer { 4, blockSize };
         juce::MidiBuffer midi;
+
+        // The swap only lands once the duck has reached silence (~4 ms) and only
+        // on a block boundary, and the output is then held down while the pad
+        // flushes. Measuring straight away sends the impulse through the OLD
+        // path, merely ducked -- which measures HQ twice and never reads
+        // ecoPadSamples at all. Feed DC until that has all resolved.
+        for (int b = 0; b < 8; ++b)
+        {
+            buffer.clear();
+
+            for (int ch = 0; ch < 2; ++ch)
+                juce::FloatVectorOperations::fill (buffer.getWritePointer (ch), 0.25f, blockSize);
+
+            p.processBlock (buffer, midi);
+        }
+
+        // The sidechain is silent, so the lid is wide open and DC passes at unity.
+        // While the duck is still active this would be 0 -- so it is the assertion
+        // that the requested path really is the one live below.
+        CHECK (std::abs (buffer.getReadPointer (0)[blockSize - 1] - 0.25f) < 0.01f);
+
+        // Let the DC step's own tail clear before the impulse goes in.
+        for (int b = 0; b < 2; ++b) { buffer.clear(); p.processBlock (buffer, midi); }
 
         auto best = 0.0f;
         auto bestIndex = 0;
@@ -227,6 +239,7 @@ void hqLatencyIsConstant()
 
     // The headline claim: toggling HQ does not move the reported latency.
     CHECK (hqReported == ecoReported);
+    CHECK (ecoPeak > 0);
 
     // And the padding makes that honest -- the audio really does come out in the
     // same place. Minimum phase is not flat delay, so allow a couple of samples.
@@ -242,11 +255,7 @@ void hqSwitchDoesNotClick()
     constexpr int switchBlock = 20;
 
     HardCapProcessor p;
-    juce::AudioProcessor::BusesLayout layout;
-    layout.inputBuses.add (juce::AudioChannelSet::stereo());
-    layout.inputBuses.add (juce::AudioChannelSet::stereo());
-    layout.outputBuses.add (juce::AudioChannelSet::stereo());
-    CHECK (p.setBusesLayout (layout));
+    CHECK (p.setBusesLayout (stereoLayout()));
 
     p.prepareToPlay (48000.0, bs);
     p.apvts.getParameter ("hq")->setValueNotifyingHost (1.0f);
