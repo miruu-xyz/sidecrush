@@ -43,8 +43,11 @@ Full details, including everything deliberately left out, are in [SPEC.md](SPEC.
 | **FILTER PRE/POST** | Rectifier order. POST turns the detector into an envelope follower. |
 | **MONO/STEREO** | Sidechain detection linking. The output is always stereo. |
 | **EXT/INT** | External sidechain bus, or the main input driving its own lid. |
+| **HQ** | Oversampling quality. On: 8×, linear phase. Off: 4×, minimum phase, for about a third of the CPU. |
 
-Everything runs at 8× oversampling: a hard clip whose threshold moves every sample is about the most alias-prone thing you can build.
+By default everything runs at 8× oversampling: a hard clip whose threshold moves every sample is about the most alias-prone thing you can build. Both paths need it — the clipper loses roughly 9 dB of alias floor per halving, and the detector cannot be run slower and interpolated up, because the interpolation's images land exactly on the decimator's fold points.
+
+**HQ** off drops both paths to 4× minimum phase when you would rather have the CPU back: measured at about a third the cost, for an alias floor of −60 dB instead of −69 dB. Toggling it never changes the reported latency — the cheaper path is padded back out to match, so no host is asked to renegotiate delay compensation mid-session — and the swap is ducked over a few milliseconds, because linear phase and minimum phase do not line up and the seam would otherwise click.
 
 ## Building
 
@@ -77,6 +80,21 @@ Two, both plain executables with no framework:
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
 
+### Measurement tools
+
+Two more executables that print numbers rather than pass or fail. They are **not** built by default and are not registered with `ctest`, so CI never links them — build them by hand when you touch the DSP:
+
+```bash
+cmake --build build --target hardcap_bench hardcap_alias
+```
+
+They land next to the tests, in `build/hardcap_bench_artefacts/<config>/` and `build/hardcap_alias_artefacts/<config>/`.
+
+- `hardcap_bench` — where the CPU goes. Cost per block size and sample rate, HQ on versus off, each sidechain routing, the cost of each oversampler and of the engine loop on its own, and how far the output steps when HQ is toggled mid-signal.
+- `hardcap_alias` — what the oversampling buys. Alias floor per factor for the clipper and for the detector, FIR against IIR, and how far the finished output moves if the detector's upsampler is swapped for a cheaper one.
+
+Between them they are the evidence for why both paths sit at 8×, why the detector cannot simply run slower, and what HQ costs. The constants in `PluginProcessor.h` quote their figures, so if you change the DSP, re-run them and update the comments.
+
 ### CI
 
 Every push builds and validates on Linux and Windows: `ctest`, then `pluginval` at strictness 10, plus a separate ASan/UBSan job. **macOS runs on tags and manual dispatch only** — it bills at 10x on a private repo and it is the one platform that can be tested locally for free. Run it on demand from the Actions tab when you want it.
@@ -86,6 +104,8 @@ A newer push cancels an in-flight run for the same ref. Tags are exempt.
 ## Status
 
 The DSP is complete and matches the spec. The interface is **functional but not yet the real one** — controls, layout and the oscilloscope all work, but the Figma design's custom knob artwork, glows and typography are not yet drawn. That is the next chunk of work.
+
+**HQ** has no on-screen control yet. The parameter exists and is automatable and saved, so hosts will show it in their generic view, but it needs a place in the Figma layout before it gets a button.
 
 ## Licence
 

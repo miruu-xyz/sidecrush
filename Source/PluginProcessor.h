@@ -18,7 +18,7 @@ struct ScopeFrame
 // power-of-two ring is enough -- no allocation, no locks, no blocking.
 //
 // ponytail: a torn frame is possible if the editor reads exactly as the audio
-// thread overwrites that slot. At 60 fps over a 32k ring that is one bad pixel
+// thread overwrites that slot. At 30 fps over a 32k ring that is one bad pixel
 // column at worst. Use AbstractFifo if it ever becomes visible.
 class ScopeFifo
 {

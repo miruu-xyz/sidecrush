@@ -79,6 +79,7 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 | FILTER POS | choice | PRE / POST | PRE | rectifier order |
 | SC LINK | choice | MONO / STEREO | STEREO | sidechain detection only; output is always stereo |
 | SC SOURCE | choice | EXT / INT | EXT | INT = main input drives its own lid |
+| HQ | bool | off / on | **on** | on = 8x linear phase, off = 4x minimum phase (see 4.1) |
 
 Notes:
 
@@ -93,7 +94,7 @@ Notes:
 ## 3. Signal flow
 
 ```
-                        ┌─────────────── 8x oversampled ───────────────┐
+                        ┌─────── 8x oversampled, 4x without HQ ────────┐
                         │                                              │
  main in ──> PRE ───────┼──────────────────────────┐                   │
                         │                          │                   │
@@ -107,7 +108,7 @@ Notes:
                                         OUTPUT ──> main out
 ```
 
-Sidechain source and link happen at base rate; everything from the filter onward runs oversampled.
+Sidechain source and link happen at base rate; everything from the filter onward runs oversampled — 8x with HQ on, 4x with it off.
 
 ---
 
@@ -115,13 +116,30 @@ Sidechain source and link happen at base rate; everything from the filter onward
 
 ### 4.1 Oversampling
 
-**Fixed 8x**, no user control. Four independent alias sources: the rectifier's corner at every zero crossing, the `t^p` exponent, the moving hard clamp, and the multiply itself (`carrier * lid` is bandwidth-expanding even in VCA mode, since `lid` carries harmonics up to Nyquist and the products fold). Moving hard clip is the worst of them; dedicated clippers routinely run 16–32x.
+**8x with HQ on, 4x with it off.** Four independent alias sources: the rectifier's corner at every zero crossing, the `t^p` exponent, the moving hard clamp, and the multiply itself (`carrier * lid` is bandwidth-expanding even in VCA mode, since `lid` carries harmonics up to Nyquist and the products fold). Moving hard clip is the worst of them; dedicated clippers routinely run 16–32x.
 
-Use `juce::dsp::Oversampling` with an equiripple FIR and report latency to the host.
+Use `juce::dsp::Oversampling` and report latency to the host.
 
-Run the **entire** detector and mechanism oversampled, including the filter, as a single code path. The filter is linear and generates no aliasing, so filtering at base rate and upsampling afterward is a valid optimisation — but an 8-pole SVF at 8x stereo is roughly 50 MFLOP/s, which is not worth a second code path and a mode-dependent architecture. Take the optimisation only if profiling demands it.
+Both the carrier and the detector run at the full rate, and measurement says both have to. Alias floor against the fundamental, from `tests/alias.cpp`:
 
-`ponytail: fixed 8x with no UI. Add a quality setting only if measured CPU is a real complaint; ADAA on the clipper would buy most of it back before a user-facing control is warranted.`
+| | 1x | 2x | 4x | 8x |
+|---|---|---|---|---|
+| clipper | −32 dB | −48 dB | −60 dB | −69 dB |
+
+Roughly 9 dB per halving. The obvious saving — run the detector slower and interpolate the lid up to the carrier's rate — **does not work**: the interpolation's images land on the decimator's fold points, so a 2x detector with an interpolated lid measures −53 dB against 8x's −85 dB. The lid has to be computed at the rate it is used at.
+
+Filtering at base rate and upsampling afterward stays valid in principle — the filter is linear and generates no aliasing — but it is not where the money is. Profiling put the engine loop at roughly an eighth of the plugin's cost and the two oversamplers at the rest, so a second code path would buy almost nothing. The rectifier is the part that cannot move.
+
+What the routing *can* skip is arithmetic it has already done: with INT + STEREO the detector is the main input, so the carrier's upsampled block is reused directly, and any routing that puts the same signal on every detector channel upsamples one channel instead of two. Both are exact and are checked bit-for-bit in `tests/host_test.cpp`.
+
+#### HQ
+
+HQ off switches both paths to 4x polyphase IIR — minimum phase instead of linear — for about a third of the CPU, at an alias floor of −60 dB instead of −69 dB. Two constraints make it shippable rather than merely cheap:
+
+- **Latency must not move.** The shorter path is padded back out to the 8x figure, so `setLatencySamples` reports the same number in both modes and no host is asked to renegotiate delay compensation mid-session.
+- **The swap must not click.** Linear phase and minimum phase do not line up, so the seam steps regardless of how carefully the incoming cascade is primed — priming does not fix it. The output is ducked over ~4 ms and held silent until the padding delay has flushed. Unducked, the seam steps 22x the steady-state sample delta.
+
+Both oversampler pairs are built in `prepareToPlay`, so toggling HQ never allocates on the audio thread.
 
 ### 4.2 The shaping exponent
 
@@ -143,7 +161,7 @@ Cascaded **TPT state-variable** sections, Butterworth-aligned, one 1-pole sectio
 
 ### 4.5 Real-time safety
 
-`ScopedNoDenormals` in `processBlock`. No allocation, no locks, no file or GUI access on the audio thread. Scope data crosses to the editor via a lock-free FIFO only.
+`ScopedNoDenormals` in `processBlock`. No allocation, no locks, no file or GUI access on the audio thread. Scope data crosses to the editor via a lock-free FIFO only. HQ is the obvious way this could be broken — both oversampler pairs are therefore allocated up front and the toggle only switches which pair is addressed.
 
 ---
 
@@ -171,7 +189,7 @@ Both traces share one normalised amplitude axis (±1.0 full scale), which is leg
 **Triggering:** latch on the rising zero crossing of the filtered sidechain with a holdoff; free-run when it is silent.
 **Timebase:** derive the period from the measured zero-crossing interval and clamp it, so the window auto-scales to show ~2 cycles regardless of the sub's pitch. Without this a 40 Hz sub and a 100 Hz sub look wildly different.
 **Channel:** left only.
-**Repaint:** 60 fps from a lock-free FIFO.
+**Repaint:** 30 fps from a lock-free FIFO. The FIFO is still filled at base rate; 30 is plenty to read and costs half of 60, and this timer runs for as long as the editor is open whether or not the host is playing.
 
 ### 5.2 Interaction states
 
@@ -190,7 +208,7 @@ Both traces share one normalised amplitude axis (±1.0 full scale), which is leg
 - **MIT** for this repository. JUCE is used under the free **Starter** tier — its own modules remain under the JUCE licence, and MIT demands nothing of code it links against, so there is no conflict. Forkers need their own JUCE licence, which is normal.
   - GPLv3 was rejected: it conflicts with the proprietary Starter terms unless a linking exception is granted.
   - The VST3 SDK is MIT as of late 2025, so no Steinberg agreement is required.
-- **CI** (GitHub Actions): macOS universal, Windows x64, Linux x64. `pluginval` at strictness 10 on every build. ASan/UBSan on the Linux job.
+- **CI** (GitHub Actions): Linux x64 and Windows x64 on every push, `pluginval` at strictness 10, plus an ASan/UBSan job. macOS universal runs on tags and manual dispatch only — it bills at 10x on a private repo and is the one platform testable locally for free.
 - **No preset browser.** Host-saved state only, plus a handful of `.vstpreset` files in the repo as starting points. Ship one that turns CLIP on with PRE around +12 dB — that is where the signature sound lives.
 - Figma SVGs exported to `Resources/` and loaded via `juce::Drawable`. JUCE 9's lunasvg-based parser handles the radial gradients, blend modes and clip paths this design uses; JUCE 8's would not have.
 
@@ -203,6 +221,5 @@ Both traces share one normalised amplitude axis (±1.0 full scale), which is leg
 | True bipolar ring-mod mode | different effect, needs a DEPTH control, no panel space | if the lid turns out to be tuneable enough that depth is the missing axis |
 | CROSS sidechain routing (L↔R) | MONO+CROSS collapses to INT — a dead option in a four-way matrix | never, unless SC LINK is redesigned |
 | Auto-makeup gain | fights the effect; the whole point is that the output ducks | never |
-| Oversampling quality control | 8x fixed until CPU is measured, not assumed | if profiling shows a real cost |
 | Preset browser | real chunk of undesigned UI | if `.vstpreset` files prove insufficient |
 | mono → stereo bus layout | doubles the matrix for nothing | if a user actually asks |
