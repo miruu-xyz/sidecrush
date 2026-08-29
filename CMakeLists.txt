@@ -28,6 +28,19 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 #===============================================================================
+# The editor's typeface and the two real icons from the Figma file. Zalando Sans
+# Expanded is OFL (Resources/fonts/OFL.txt); only the roman variable face ships,
+# and its default instance is the Regular the design uses.
+juce_add_binary_data(HardCapAssets SOURCES
+    Resources/fonts/ZalandoSansExpanded.ttf
+    Resources/icons/settings.svg
+    Resources/icons/close.svg)
+
+# Binary data lands in a static lib that gets linked into a shared plugin
+# module, so it has to be position-independent.
+set_target_properties(HardCapAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+
+#===============================================================================
 juce_add_plugin(HardCap
     COMPANY_NAME                "miruu"
     COMPANY_WEBSITE             "https://github.com/miruu-xyz/hardcap"
@@ -56,6 +69,7 @@ target_compile_definitions(HardCap PUBLIC
 
 target_link_libraries(HardCap
     PRIVATE
+        HardCapAssets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -119,3 +133,30 @@ foreach(tool bench alias)
 
     set_target_properties(hardcap_${tool} PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endforeach()
+
+#===============================================================================
+# Headless editor snapshot. The only other way to look at the GUI is a DAW or the
+# Standalone, and the Standalone wrapper opens the default audio input *and*
+# output -- which on a laptop means it can feed back through the monitors. This
+# renders the editor offscreen instead. Not a test; built on demand:
+#
+#   cmake --build build --target hardcap_shot
+#   build/hardcap_shot_artefacts/Release/hardcap_shot out.png ceiling=-24 hover=clip
+juce_add_console_app(hardcap_shot PRODUCT_NAME "hardcap_shot")
+
+target_sources(hardcap_shot PRIVATE tools/shot.cpp)
+target_include_directories(hardcap_shot PRIVATE Source)
+
+target_link_libraries(hardcap_shot PRIVATE
+    HardCap
+    HardCapAssets
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_gui_extra
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+target_compile_options(hardcap_shot PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
+
+set_target_properties(hardcap_shot PROPERTIES EXCLUDE_FROM_ALL TRUE)

@@ -167,38 +167,90 @@ Cascaded **TPT state-variable** sections, Butterworth-aligned, one 1-pole sectio
 
 ## 5. Interface
 
-Panel layout is defined in Figma:
+Panel layout is defined in Figma and the file is the source of truth:
 https://www.figma.com/design/Hc5nzirm4UIGqWrgbs5Uy2/Miruu-Plugin-Collection?node-id=1-11
 
-Controls: PRE slider, CEILING knob (large), FILTER knob, SHAPE knob, SLOPE field, FLOOR field, OUTPUT slider, and a toggle row under the scope — CLIP / FILTER POS / SC LINK / SC SOURCE.
+The canvas is **968 x 326** and the editor is laid out against those coordinates
+exactly. It does not reflow: the whole editor carries an affine scale and the
+right-click menu offers 75 / 100 / 125 / 150 %, stored in the plug-in state.
+
+Typeface is Zalando Sans Expanded (OFL), embedded from `Resources/fonts/`. Figma
+sizes are em sizes, so they are applied with `withPointHeight`, not `withHeight`.
+
+Most of the design's text and hairlines use `mix-blend-mode: color-dodge`, which
+has no JUCE equivalent. The palette in `PluginEditor.h` is therefore **sampled
+from a 1:1 render of the frame** (`Resources/reference/figma-1-11.png`) rather
+than copied from the layer list — #b1b1b1 dodged over the #101419 background is
+#344151, and only the second number can be used directly.
+
+Controls: PRE fader, CEILING dial (large), FILTER dial, SHAPE dial, SLOPE pill,
+FLOOR pill, OUT fader, a CLIP toggle in the scope's lower-right corner, and a
+gear in the upper-right that swaps the scope for a settings panel carrying
+STEREO / HQ / FILTER PRE / SIGNAL EXT.
+
+The settings panel is a **swap, not an overlay** — it takes the scope's exact
+bounds, which is how Figma draws it (Oscilloscope variant "Variant3"). There is
+no designed popup anywhere in the file.
 
 ### 5.1 Oscilloscope
 
 | element | colour | meaning |
 |---|---|---|
 | sidechain | cyan line | filtered sidechain, post-filter, pre-rectifier — the signal the thresholds measure |
-| ±CEILING | blue lines | symmetric, because the detector is rectified |
-| ±FLOOR | red lines | symmetric; collapse onto the centre line when FLOOR is OFF |
-| lid | grey aperture mask | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
-| output | white line | squashes flat against the mask as it descends |
+| ±CEILING | cyan gradient bands | fill from each edge inward to the threshold; the clamped region |
+| ±FLOOR | red band | symmetric around the centre; collapses to nothing when FLOOR is OFF |
+| lid | grey line pair | ±lid, the aperture the carrier is squashed against |
+| output | white line | slams flat against the aperture as it closes |
 
-The lid is drawn as a **closing aperture rather than a line** — it stops competing with the sidechain for line-reading attention, and makes "hard cap" literal. No input ghost trace: four elements is already a lot, and the undamaged parts of the output imply it.
+Both traces share one normalised amplitude axis (±1.0 full scale), which is
+legitimate because carrier and sidechain are both full-scale audio.
 
-Both traces share one normalised amplitude axis (±1.0 full scale), which is legitimate because carrier and sidechain are both full-scale audio.
+**Layer order** follows Figma and is not the obvious one: zero line, then the
+floor band, then the traces, then the lid bands over the top. Drawing the lid
+bands first instead loses the tint where a trace crosses into the clamped
+region, which is the one place the overlay says something.
 
-**Triggering:** latch on the rising zero crossing of the filtered sidechain with a holdoff; free-run when it is silent.
-**Timebase:** derive the period from the measured zero-crossing interval and clamp it, so the window auto-scales to show ~2 cycles regardless of the sub's pitch. Without this a 40 Hz sub and a 100 Hz sub look wildly different.
+**Thresholds** are derived in the editor from the parameters, not mirrored out
+of the engine. The engine only refreshes its copy inside `processBlock`, so in a
+stopped host the bands would sit at their defaults until playback started.
+
+**Triggering:** latch on the most recent rising crossing of the trace's own
+mean. In PRE the detector is bipolar and the mean is ~0, i.e. a zero crossing; in
+POST it is a rectified envelope that never goes negative, where a zero crossing
+could only fire at the bottom of the clamp and the display would free-run.
+
+**Timebase:** derive the period from the measured crossing interval and clamp it,
+so the window auto-scales to ~2 cycles regardless of the sub's pitch. Without
+this a 40 Hz sub and a 100 Hz sub look wildly different.
+
+**Sampling:** two cycles of a 40 Hz sub is ~2400 samples across 380 pixels, so
+each pixel column is drawn as the min/max of the samples inside it, joined to its
+neighbour. A polyline through every sixth sample misses the peaks, and which
+samples it lands on shifts frame to frame, so the carrier appears to crawl.
+
 **Channel:** left only.
-**Repaint:** 30 fps from a lock-free FIFO. The FIFO is still filled at base rate; 30 is plenty to read and costs half of 60, and this timer runs for as long as the editor is open whether or not the host is playing.
+**Repaint:** 30 fps from a lock-free FIFO. The FIFO is still filled at base rate;
+30 is plenty to read and costs half of 60, and this timer runs for as long as the
+editor is open whether or not the host is playing.
 
 ### 5.2 Interaction states
 
-- dragging **SHAPE** → highlight the aperture mask, showing the ramp as it would be applied
-- dragging **CEILING** or **FLOOR** → highlight the corresponding threshold lines
-- **FILTER** knob greys out at the OFF detent
-- **SLOPE** field is draggable and snaps to the eight values
-- the dot beside CEILING is a **lid-activity LED**: brightness tracks instantaneous gain reduction
-- mono instance → MONO/STEREO greyed to its inoperative state
+Taken from the Figma component variants, not invented:
+
+- **Generic Interactable** — a pill gains a cyan border and a soft cyan glow while
+  hovered or dragged. Applies to SLOPE, FLOOR, CLIP and the settings switches.
+- **CLIP** — engaged, it tints its own well red, borders in #e73131 and hangs a
+  wide red glow. Off, it keeps a hairline border and drops its text to the
+  section-caption tone rather than full white.
+- **FILTER** — the word under the dial reads "FILTER" at rest and swaps to a cyan
+  PRE / POST while hovered. Clicking it flips the two.
+- **SHAPE** — while the dial is being dragged, the scope overlays the ramp the
+  current exponent would apply.
+- **FILTER dial** — its pointer goes flat grey at the OFF detent, and the SLOPE
+  pill reads OFF with it. It is the only dial that does this.
+- **SLOPE / FLOOR** — draggable; 150 px of travel covers the whole range.
+- the dot beside CEILING is a **lid-activity LED**: brightness tracks
+  instantaneous gain reduction.
 
 ---
 

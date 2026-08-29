@@ -3,8 +3,6 @@
 
 // The FILTER sweep tops out at 20 kHz and the top detent is OFF: Nyquist at
 // 48 kHz is 24 kHz, so above ~20 kHz the filter is doing nothing anyway.
-static constexpr float filterOffHz = 20000.0f;
-static constexpr float floorOffDb = -60.0f;
 
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createParameterLayout (
@@ -58,8 +56,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::slope, 1 }, "Slope",
-        StringArray { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct",
-                      "30 dB/oct", "36 dB/oct", "42 dB/oct", "48 dB/oct" }, 1));
+        StringArray { "6dB/oct", "12dB/oct", "18dB/oct", "24dB/oct",
+                      "30dB/oct", "36dB/oct", "42dB/oct", "48dB/oct" }, 1));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::output, 1 }, "Output",
@@ -198,8 +196,6 @@ void HardCapProcessor::pullParameters()
     engine.setParams (p);
 
     filterIsPost.store (p.filterPost, std::memory_order_relaxed);
-    ceilingLinear.store (engine.getParams().ceilingLin, std::memory_order_relaxed);
-    floorLinear.store (engine.getParams().floorLin, std::memory_order_relaxed);
 }
 
 void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)

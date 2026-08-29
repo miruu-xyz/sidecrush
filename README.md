@@ -95,6 +95,28 @@ They land next to the tests, in `build/hardcap_bench_artefacts/<config>/` and `b
 
 Between them they are the evidence for why both paths sit at 8×, why the detector cannot simply run slower, and what HQ costs. The constants in `PluginProcessor.h` quote their figures, so if you change the DSP, re-run them and update the comments.
 
+### Looking at the GUI
+
+`hardcap_shot` renders the editor offscreen to a PNG. It exists because the only other ways to see the interface are a DAW or the Standalone, and the Standalone wrapper opens the default audio input *and* output — which on a laptop can feed back through the monitors. Also not built by default:
+
+```bash
+cmake --build build --target hardcap_shot
+build/hardcap_shot_artefacts/Release/hardcap_shot out.png [args...]
+```
+
+| argument | effect |
+|---|---|
+| `<id>=<value>` | any parameter from `ids::`, in its own units — `ceiling=-24`, `slope=3`, `clip=0` |
+| `audio=<hz>` | push a sub at that frequency through the sidechain against a carrier, so the scope has something to draw |
+| `hover=<id>` | put a control into its hover state — `hover=clip`, `hover=slope`, `hover=filterlabel` |
+| `settings` | render the settings panel instead of the scope |
+| `crop=x,y,w,h` | crop, in design coordinates |
+| `scale=N` | supersample, for looking at detail |
+
+An unknown key is an error rather than a silent no-op: a typo that quietly renders the default state is worse than useless when the point is comparing against a design.
+
+`tools/pngpick.py` reads pixels back out (`python3 tools/pngpick.py shot.png 640,140`), which is how the palette was matched to `Resources/reference/figma-1-11.png` — the design leans on `color-dodge`, so the layer colours are not the rendered colours.
+
 ### CI
 
 Every push builds and validates on Linux and Windows: `ctest`, then `pluginval` at strictness 10, plus a separate ASan/UBSan job. **macOS runs on tags and manual dispatch only** — it bills at 10x on a private repo and it is the one platform that can be tested locally for free. Run it on demand from the Actions tab when you want it.
@@ -103,9 +125,11 @@ A newer push cancels an in-flight run for the same ref. Tags are exempt.
 
 ## Status
 
-The DSP is complete and matches the spec. The interface is **functional but not yet the real one** — controls, layout and the oscilloscope all work, but the Figma design's custom knob artwork, glows and typography are not yet drawn. That is the next chunk of work.
+The DSP is complete and matches the spec, and the interface now implements the Figma design — layout, typeface, dial and fader artwork, the recessed wells, the glows, the oscilloscope overlays, and the hover and engaged states from the file's component variants. See [SPEC §5](SPEC.md) for what was taken from where.
 
-**HQ** has no on-screen control yet. The parameter exists and is automatable and saved, so hosts will show it in their generic view, but it needs a place in the Figma layout before it gets a button.
+**HQ** has a control now: the gear in the scope's upper-right swaps in the settings panel, where HQ sits alongside STEREO, FILTER PRE/POST and SIGNAL EXT — matching the Oscilloscope "Variant3" component rather than a popup, because the file has no popup designed anywhere.
+
+Known gaps, both cosmetic: the readouts print the parameters' own strings (`-6.0 dB`) where the design shows a compact `0dB`, and the design's fader caps are parked at a position that does not correspond to their labelled value, so cap travel is mapped linearly across the track instead.
 
 ## Licence
 

@@ -24,6 +24,12 @@ namespace ids
     constexpr auto hq        = "hq";
 }
 
+// The top of the filter's range and the bottom of the floor's both mean "off"
+// rather than a value. The editor needs them too -- it blanks the slope
+// selector and flattens the filter dial's pointer at that end of the sweep.
+constexpr float filterOffHz = 20000.0f;
+constexpr float floorOffDb = -60.0f;
+
 //==============================================================================
 struct ScopeFrame
 {
@@ -107,9 +113,6 @@ public:
                                                createParameterLayout (&filterIsPost) };
     ScopeFifo scope;
 
-    // Read by the editor to draw the threshold lines on the same axis as the trace.
-    std::atomic<float> ceilingLinear { 0.5f };
-    std::atomic<float> floorLinear { 0.0f };
     std::atomic<float> gainReduction { 0.0f }; // 0 = lid open, 1 = fully shut
 
 private:
