@@ -76,7 +76,7 @@ On macOS, building without full Xcode works — Command Line Tools are enough fo
 Two, both plain executables with no framework:
 
 - `hardcap_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
-- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips.
+- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the three things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that toggling HQ does not move the reported latency, and that the HQ swap does not click.
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
 
