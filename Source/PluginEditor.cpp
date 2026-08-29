@@ -267,23 +267,8 @@ void Pill::drawLabel (juce::Graphics& g, juce::String text, bool engaged, bool d
                 juce::Justification::centredLeft);
 }
 
-void Pill::mouseEnter (const juce::MouseEvent&)
-{
-    hovered = true;
-    repaint();
-
-    if (onHover != nullptr)
-        onHover (true);
-}
-
-void Pill::mouseExit (const juce::MouseEvent&)
-{
-    hovered = false;
-    repaint();
-
-    if (onHover != nullptr)
-        onHover (false);
-}
+void Pill::mouseEnter (const juce::MouseEvent&) { hovered = true;  repaint(); }
+void Pill::mouseExit  (const juce::MouseEvent&) { hovered = false; repaint(); }
 
 void Pill::mouseDown (const juce::MouseEvent&)
 {
@@ -467,6 +452,7 @@ void ActivityLed::paint (juce::Graphics& g)
 ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p)
 {
     setComponentID ("scope");
+    setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
 }
 
 void ScopeComponent::refresh()
@@ -484,16 +470,46 @@ void ScopeComponent::setOverlay (Overlay wanted)
     repaint();
 }
 
-void ScopeComponent::mouseEnter (const juce::MouseEvent&)
+void ScopeComponent::mouseDown (const juce::MouseEvent& e)
 {
-    if (onHover != nullptr)
-        onHover (true);
+    if (e.mods.isPopupMenu())
+        return;
+
+    auto& ceiling = *processor.apvts.getParameter (ids::ceiling);
+    ceilingAtDragStart = ceiling.getValue();
+    ceiling.beginChangeGesture();
+    dragging = true;
+
+    if (onDragActive != nullptr)
+        onDragActive (true);
 }
 
-void ScopeComponent::mouseExit (const juce::MouseEvent&)
+void ScopeComponent::mouseDrag (const juce::MouseEvent& e)
 {
-    if (onHover != nullptr)
-        onHover (false);
+    if (! dragging)
+        return;
+
+    // CEILING is tapered to amplitude and this axis *is* amplitude, so a pixel
+    // of drag is a pixel of threshold: whatever the distance between the band's
+    // edge and where you want it, that is how far you drag. No sensitivity
+    // constant to pick, because the display already fixes the scale.
+    const auto amp = (float) getHeight() * 0.5f - 10.0f;
+    const auto moved = ceilingAtDragStart - (float) e.getDistanceFromDragStartY() / amp;
+
+    processor.apvts.getParameter (ids::ceiling)
+             ->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, moved));
+}
+
+void ScopeComponent::mouseUp (const juce::MouseEvent&)
+{
+    if (! dragging)
+        return;
+
+    dragging = false;
+    processor.apvts.getParameter (ids::ceiling)->endChangeGesture();
+
+    if (onDragActive != nullptr)
+        onDragActive (false);
 }
 
 void ScopeComponent::paint (juce::Graphics& g)
@@ -589,6 +605,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 
     const auto showThresholds = overlay == Overlay::thresholds;
     const auto centreX = bounds.getCentreX();
+    const auto post = processor.apvts.getRawParameterValue (ids::filterPos)->load() > 0.5f;
 
     // Both sidechain gradients run the full +/-1 amplitude span, so their stops
     // can be placed at the ceiling and the floor and stay there as those move.
@@ -743,6 +760,22 @@ void ScopeComponent::paint (juce::Graphics& g)
             const auto sidechain = buildTrace ([] (const ScopeFrame& f) { return f.sc; });
             const auto output = buildTrace ([] (const ScopeFrame& f) { return f.out; });
 
+            // In POST the detector is a rectified envelope, and drawn literally
+            // it is a half-wave sitting on the centre line -- which reads as a
+            // broken trace rather than as the signal a *symmetric* pair of
+            // thresholds is measuring. So its mirror image is drawn alongside
+            // it and the envelope brackets the centre the way the lid does.
+            // Nothing about the trace itself changes, so it still crosses the
+            // ceiling exactly where the lid closes; the reflection is the same
+            // sample at the same x, and cannot drift from it.
+            juce::Path mirrored;
+
+            if (post)
+            {
+                mirrored = sidechain;
+                mirrored.applyTransform (juce::AffineTransform::verticalFlip (2.0f * mid));
+            }
+
             if (showThresholds)
             {
                 // The sidechain is the thing being measured against the bands,
@@ -750,6 +783,9 @@ void ScopeComponent::paint (juce::Graphics& g)
                 // ghost. Figma drops the lid aperture entirely here.
                 g.setGradientFill (window);
                 g.fillPath (closeOnto (sidechain, mid));
+
+                if (post)
+                    g.fillPath (closeOnto (mirrored, mid));
 
                 // ... and its outline greys out where it is inside the floor
                 // band, where the lid is wide open and the level means nothing.
@@ -762,6 +798,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 
                 g.setGradientFill (outline);
                 g.strokePath (sidechain, stroke (1.6f));
+                g.strokePath (mirrored, stroke (1.6f));
 
                 g.setColour (hccolour::output.withAlpha (0.1f));
                 g.strokePath (output, stroke (1.4f));
@@ -770,6 +807,7 @@ void ScopeComponent::paint (juce::Graphics& g)
             {
                 g.setGradientFill (window);
                 g.strokePath (sidechain, stroke (1.6f));
+                g.strokePath (mirrored, stroke (1.6f));
 
                 // The lid as the aperture it is: everything outside it masked
                 // off, densest against the opening and fading out towards the
@@ -937,16 +975,15 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
     shapeCaption.setInterceptsMouseClicks (false, false);
 
     // ---- who gets to claim the display -------------------------------------
-    const auto hover = [this] (bool over) { thresholdHover = over; updateScopeOverlay(); };
+    // Only an actual drag does. The resting state already carries the thresholds
+    // in the sidechain's own fade, so raising the bands on hover made them flash
+    // every time the pointer crossed a dial on its way somewhere else.
     const auto drag = [this] (bool active) { thresholdDrag = active; updateScopeOverlay(); };
-
-    ceilingKnob.onHover = hover;
-    floorPill.onHover = hover;
-    scope.onHover = hover;
 
     ceilingKnob.onDragStart = [drag] { drag (true); };
     ceilingKnob.onDragEnd = [drag] { drag (false); };
     floorPill.onDragActive = drag;
+    scope.onDragActive = drag;
 
     filterKnob.onDragStart = [this] { filterCaption.setValueText (filterKnob.getTextFromValue (filterKnob.getValue())); };
     filterKnob.onDragEnd = [this] { filterCaption.setValueText ({}); };
@@ -1079,16 +1116,16 @@ void HardCapEditor::applySlope (int index)
 
 void HardCapEditor::updateScopeOverlay()
 {
-    scope.setOverlay (shapeDrag                      ? ScopeComponent::Overlay::shape
-                    : thresholdDrag || thresholdHover ? ScopeComponent::Overlay::thresholds
-                                                      : ScopeComponent::Overlay::traces);
+    scope.setOverlay (shapeDrag     ? ScopeComponent::Overlay::shape
+                    : thresholdDrag ? ScopeComponent::Overlay::thresholds
+                                    : ScopeComponent::Overlay::traces);
 
     // CLIP belongs to the scope's frame, not to the SHAPE curve that stands in
     // for it -- only the wordmark and the gear carry over.
     clipPill.setVisible (! settings.isVisible() && ! shapeDrag);
 }
 
-void HardCapEditor::addSlider (HoverSlider& slider, juce::Slider::SliderStyle style,
+void HardCapEditor::addSlider (juce::Slider& slider, juce::Slider::SliderStyle style,
                                const char* paramId, juce::Colour pointer, bool withReadout,
                                std::unique_ptr<SliderAttachment>& attachment)
 {

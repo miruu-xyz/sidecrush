@@ -110,6 +110,7 @@ build/hardcap_shot_artefacts/Release/hardcap_shot out.png [args...]
 | `audio=<hz>` | push a sub at that frequency through the sidechain against a carrier, so the scope has something to draw |
 | `hover=<id>` | put a control into its hover state — `hover=clip`, `hover=ceiling`, `hover=scope` |
 | `drag=<id>` | put a control into its dragging state, which is what the scope's overlays key off — `drag=ceiling`, `drag=shape` |
+| `drag=<id>:<dy>` | actually press and pull it that many pixels, negative being up — `drag=scope:-40`, `drag=slope:60`. Checks what a drag *does*, not just how it looks |
 | `settings` | render the settings panel instead of the scope |
 | `crop=x,y,w,h` | crop, in design coordinates |
 | `scale=N` | supersample, for looking at detail |

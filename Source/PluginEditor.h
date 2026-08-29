@@ -87,31 +87,6 @@ public:
 };
 
 //==============================================================================
-// juce::Slider has onDragStart and onDragEnd but nothing for hover, and the
-// scope has to know when the pointer is merely resting on a dial.
-class HoverSlider final : public juce::Slider
-{
-public:
-    void mouseEnter (const juce::MouseEvent& e) override
-    {
-        juce::Slider::mouseEnter (e);
-
-        if (onHover != nullptr)
-            onHover (true);
-    }
-
-    void mouseExit (const juce::MouseEvent& e) override
-    {
-        juce::Slider::mouseExit (e);
-
-        if (onHover != nullptr)
-            onHover (false);
-    }
-
-    std::function<void (bool)> onHover;
-};
-
-//==============================================================================
 // Everything the design calls "Generic Interactable": a 21px-tall well with
 // centred text that lights up cyan on hover. Several behaviours share it --
 // drag a value, click to cycle a choice, click to open a menu -- because the
@@ -142,7 +117,6 @@ public:
     // stepping blindly through eight values.
     std::function<void()> onClick;
 
-    std::function<void (bool)> onHover;
     std::function<void (bool)> onDragActive;
 
     // Decided at mouse-down, because a pill can act on something other than the
@@ -258,10 +232,11 @@ class ScopeComponent final : public juce::Component
 public:
     enum class Overlay
     {
-        traces,     // at rest: the lid aperture, the sidechain and the output
-        thresholds, // pointing at or dragging a threshold control, or over the
-                    // scope itself: the sidechain fills out and everything else
-                    // gets out of its way, against the ceiling and floor bands
+        traces,     // at rest: the lid aperture, the sidechain and the output.
+                    // The sidechain's own fade already says where the thresholds
+                    // are, so nothing has to be overlaid to make this readable
+        thresholds, // *dragging* a threshold: the sidechain fills out and
+                    // everything else gets out of its way, against the bands
         shape       // dragging SHAPE: the curve alone, no audio at all
     };
 
@@ -272,15 +247,22 @@ public:
 
     void setOverlay (Overlay);
 
-    void mouseEnter (const juce::MouseEvent&) override;
-    void mouseExit (const juce::MouseEvent&) override;
+    // The display's vertical axis is amplitude, and so is CEILING once it is
+    // tapered that way, so the scope is a perfectly good CEILING control: drag
+    // anywhere in it and the threshold -- and the dial -- follow.
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
-    std::function<void (bool)> onHover;
+    std::function<void (bool)> onDragActive;
 
 private:
     HardCapProcessor& processor;
     int64_t snapshotHead = 0;
     Overlay overlay = Overlay::traces;
+
+    bool dragging = false;
+    float ceilingAtDragStart = 0.0f;
 
     // The DSP's own lookup table, not a second copy of the formula. The curve on
     // screen is then the curve the audio takes, clamp and quantisation included.
@@ -337,14 +319,14 @@ private:
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 
-    void addSlider (HoverSlider&, juce::Slider::SliderStyle, const char* paramId,
+    void addSlider (juce::Slider&, juce::Slider::SliderStyle, const char* paramId,
                     juce::Colour pointer, bool withReadout,
                     std::unique_ptr<SliderAttachment>&);
 
     HardCapProcessor& proc;
     HardCapLookAndFeel lookAndFeel;
 
-    HoverSlider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
+    juce::Slider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
     std::unique_ptr<SliderAttachment> preAtt, outputAtt, ceilingAtt, filterAtt, shapeAtt;
 
     Pill slopePill, floorPill, clipPill;
@@ -356,7 +338,6 @@ private:
 
     // Which controls are currently claiming the display. Kept as flags rather
     // than queried from the mouse so the headless renderer can set them.
-    bool thresholdHover = false;
     bool thresholdDrag = false;
     bool shapeDrag = false;
 

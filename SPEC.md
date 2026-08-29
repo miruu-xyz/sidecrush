@@ -203,7 +203,7 @@ no designed popup anywhere in the file.
 
 | element | colour | meaning |
 |---|---|---|
-| sidechain | cyan line, or a cyan body | filtered sidechain, post-filter, pre-rectifier — the signal the thresholds measure |
+| sidechain | cyan line, or a cyan body | the detector — the signal the thresholds measure. Bipolar in PRE; in POST the envelope and its mirror image |
 | lid | white mask at 8% | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
 | output | white line | slams flat against the aperture as it closes |
 | ±CEILING | cyan gradient bands | from each edge inward to the threshold; the clamped region |
@@ -226,6 +226,16 @@ JUCE fills a stroke from a gradient as readily as it fills a shape, so this and
 the greyed outline below are both a `ColourGradient` and a `strokePath` rather
 than anything cleverer — which is what the Figma annotation asks for when it says
 it built the effect by hand and to "do this in the easiest programmatic way".
+
+**POST is drawn mirrored.** The detector in POST is a rectified envelope, so
+plotted literally it is a half-wave sitting on the centre line -- it reads as a
+broken trace, not as the signal a symmetric pair of thresholds is measuring. The
+trace is drawn together with its reflection about the centre, which brackets the
+centre the way the lid does. The data is untouched: the reflection is the same
+sample at the same x, so the envelope still crosses CEILING exactly where the lid
+closes and cannot drift out of step with it. Redrawing the raw pre-rectifier
+sidechain there instead would drift -- the filter is after the rectifier in POST,
+so the wave and the thing driving the lid are no longer the same signal.
 
 **Layer order** follows Figma: traces first, then the ceiling bands, then the
 floor band over the top. Drawing the bands underneath instead loses the tint
@@ -285,6 +295,11 @@ that a control should explain itself where they do not.
   slopes to choose between, so dragging sweeps the **filter's cutoff** instead of
   doing nothing visible, and picking a slope from the menu brings the filter in
   at **160 Hz**. A control that is inert in a reachable state reads as broken.
+- **the scope is a CEILING control.** Drag anywhere in it and the threshold, the
+  bands and the dial all follow. Because CEILING is tapered to amplitude and the
+  display's vertical axis *is* amplitude, one pixel of drag is one pixel of
+  threshold — the band edge tracks the pointer exactly, and there is no
+  sensitivity constant to pick because the display already fixes the scale.
 - the dot beside CEILING is a **lid-activity LED**: brightness tracks
   instantaneous gain reduction.
 
@@ -297,16 +312,22 @@ with the answer.
 | state | shown |
 |---|---|
 | at rest | the lid aperture, the sidechain as a line, the output |
-| pointing at or dragging CEILING or FLOOR, or over the scope | the sidechain as a filled body, the ceiling and floor bands, the output at 10% — **no lid** |
+| **dragging** CEILING, FLOOR, or the scope itself | the sidechain as a filled body, the ceiling and floor bands, the output at 10% — **no lid** |
 | dragging SHAPE | the SHAPE curve alone; no audio, no bands, no CLIP |
 
-There are two audio states, not three. Hovering a threshold control and dragging
-it show the same thing, because that state already answers both questions: the
-sidechain fills out into a solid body against the bands, and everything else
-steps back rather than being removed. The output drops to a 10% ghost — enough to
-keep the context, not enough to compete — and the lid aperture goes entirely,
-since the question being asked is about the sidechain's level and the aperture is
-about what happened to the carrier.
+**Hover does not raise the bands.** The resting state already carries the
+thresholds in the sidechain's own fade, so there is nothing to reveal, and
+raising them on hover made the display flash every time the pointer crossed a
+dial on its way somewhere else. Only a gesture that is actually changing a
+threshold changes the picture.
+
+There are two audio states, not three: a drag on CEILING and a drag on FLOOR show
+the same thing, because that state answers both questions at once. The sidechain
+fills out into a solid body against the bands and everything else steps back
+rather than being removed. The output drops to a 10% ghost — enough to keep the
+context, not enough to compete — and the lid aperture goes entirely, since the
+question being asked is about the sidechain's level and the aperture is about
+what happened to the carrier.
 
 The sidechain's outline also **greys out where it passes inside the floor band**,
 where the lid is wide open and the level is not doing anything. That is one more

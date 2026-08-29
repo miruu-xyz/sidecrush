@@ -2,7 +2,8 @@
 // device. See the target comment in CMakeLists.txt for why this exists.
 //
 //   hardcap_shot out.png [<param>=<value>] [hover=<id>] [settings]
-//                        [audio=<sidechain Hz>] [drag=<id>] [scale=N] [crop=x,y,w,h]
+//                        [audio=<sidechain Hz>] [drag=<id>[:<dy>]] [scale=N]
+//                        [crop=x,y,w,h]
 //
 // <param> is any id from ids::, given in the parameter's own units, e.g.
 // ceiling=-24, slope=3, clip=0. Unknown keys are an error rather than a silent
@@ -30,21 +31,46 @@ namespace
         return nullptr;
     }
 
-    // A Component only learns it is hovered from a real mouse, which a headless
-    // render does not have. The controls keep their own flag updated from these
-    // callbacks, so calling them directly is the same path a real hover takes.
+    // A Component only learns about the mouse from a real one, which a headless
+    // render does not have. These build the event JUCE would have delivered, so
+    // the component takes exactly the path it takes in a host.
+    juce::MouseEvent eventAt (juce::Component& c, juce::Point<float> position,
+                              juce::Point<float> downAt, bool dragged)
+    {
+        return { juce::Desktop::getInstance().getMainMouseSource(),
+                 position, juce::ModifierKeys::currentModifiers,
+                 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                 &c, &c,
+                 juce::Time::getCurrentTime(), downAt,
+                 juce::Time::getCurrentTime(), 1, dragged };
+    }
+
     void setHovered (juce::Component& c, bool on)
     {
-        const juce::MouseEvent e { juce::Desktop::getInstance().getMainMouseSource(),
-                                   c.getLocalBounds().getCentre().toFloat(),
-                                   juce::ModifierKeys::currentModifiers,
-                                   1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                                   &c, &c,
-                                   juce::Time::getCurrentTime(),
-                                   c.getLocalBounds().getCentre().toFloat(),
-                                   juce::Time::getCurrentTime(), 1, false };
+        const auto centre = c.getLocalBounds().getCentre().toFloat();
+        const auto e = eventAt (c, centre, centre, false);
 
         on ? c.mouseEnter (e) : c.mouseExit (e);
+    }
+
+    // A real press and vertical drag, so what a drag actually *does* to a value
+    // can be checked, not just what it does to the display. The button stays
+    // down: the point is to render the state mid-gesture. releaseDrag lifts it
+    // again once the snapshot is taken -- a parameter whose beginChangeGesture
+    // is never matched asserts when it is destroyed, and that noise would hide
+    // a real assertion later.
+    void dragBy (juce::Component& c, float dy)
+    {
+        const auto centre = c.getLocalBounds().getCentre().toFloat();
+
+        c.mouseDown (eventAt (c, centre, centre, false));
+        c.mouseDrag (eventAt (c, centre.translated (0.0f, dy), centre, true));
+    }
+
+    void releaseDrag (juce::Component& c, float dy)
+    {
+        const auto centre = c.getLocalBounds().getCentre().toFloat();
+        c.mouseUp (eventAt (c, centre.translated (0.0f, dy), centre, true));
     }
 }
 
@@ -69,6 +95,8 @@ int main (int argc, char** argv)
     auto scale = 1.0f;
     auto sidechainHz = 0.0;
     juce::String dragId;
+    auto dragPixels = 0.0f;
+    juce::Component* held = nullptr;
 
     for (int i = 2; i < argc; ++i)
     {
@@ -92,7 +120,14 @@ int main (int argc, char** argv)
         if (key == "scale")      { scale = value.getFloatValue(); continue; }
         if (key == "hover")      { hoverId = value; continue; }
         if (key == "audio")      { sidechainHz = value.getDoubleValue(); continue; }
-        if (key == "drag")       { dragId = value; continue; }
+        // drag=<id> just raises the dragging state; drag=<id>:<dy> presses and
+        // pulls it that many pixels, negative being upwards.
+        if (key == "drag")
+        {
+            dragId = value.upToFirstOccurrenceOf (":", false, false);
+            dragPixels = value.fromFirstOccurrenceOf (":", false, false).getFloatValue();
+            continue;
+        }
 
         if (key == "crop")
         {
@@ -161,15 +196,37 @@ int main (int argc, char** argv)
     {
         auto* target = findById (*editor, dragId);
 
-        if (auto* slider = dynamic_cast<juce::Slider*> (target); slider != nullptr && slider->onDragStart)
+        if (target == nullptr)
+        {
+            std::printf ("no component with id: %s\n", dragId.toRawUTF8());
+            return 1;
+        }
+
+        if (dragPixels != 0.0f)
+        {
+            dragBy (*target, dragPixels);
+            held = target;
+        }
+        else if (auto* slider = dynamic_cast<juce::Slider*> (target); slider != nullptr && slider->onDragStart)
+        {
             slider->onDragStart();
+        }
         else if (auto* pill = dynamic_cast<Pill*> (target); pill != nullptr && pill->onDragActive)
+        {
             pill->onDragActive (true);
+        }
+        else if (auto* display = dynamic_cast<ScopeComponent*> (target);
+                 display != nullptr && display->onDragActive)
+        {
+            display->onDragActive (true);
+        }
         else
         {
             std::printf ("nothing draggable with id: %s\n", dragId.toRawUTF8());
             return 1;
         }
+
+        editor->refreshFromParameters();
     }
 
     if (hoverId.isNotEmpty())
@@ -187,6 +244,9 @@ int main (int argc, char** argv)
 
     const auto area = crop.isEmpty() ? editor->getLocalBounds() : crop;
     const auto image = editor->createComponentSnapshot (area, true, scale);
+
+    if (held != nullptr)
+        releaseDrag (*held, dragPixels);
 
     const juce::File out { juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]) };
     out.deleteFile();
