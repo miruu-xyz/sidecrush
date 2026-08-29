@@ -19,12 +19,18 @@ jobs:
         include:
           - name: macOS
             os: macos-latest
+            generator: -G Ninja
             pluginval: pluginval_macOS.zip
+          # No -G Ninja on Windows: with Ninja on the PATH, CMake picks up MinGW
+          # rather than MSVC and JUCE refuses to build. The default Visual Studio
+          # generator is multi-config, hence --config on the build and test steps.
           - name: Windows
             os: windows-latest
+            generator: ""
             pluginval: pluginval_Windows.zip
           - name: Linux
             os: ubuntu-latest
+            generator: -G Ninja
             pluginval: pluginval_Linux.zip
 
     steps:
@@ -38,11 +44,11 @@ jobs:
             ninja-build libasound2-dev libjack-jackd2-dev \
             libfreetype-dev libfontconfig1-dev \
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
-            libxinerama-dev libxrandr-dev libxrender-dev \
+            libxi-dev libxinerama-dev libxrandr-dev libxrender-dev \
             libglu1-mesa-dev mesa-common-dev xvfb
 
       - name: Install Ninja
-        if: runner.os != 'Linux'
+        if: runner.os == 'macOS'
         uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Cache JUCE checkout
@@ -52,7 +58,7 @@ jobs:
           key: ${{ runner.os }}-juce-9.0.1
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+        run: cmake -B build ${{ matrix.generator }} -DCMAKE_BUILD_TYPE=$BUILD_TYPE
         shell: bash
 
       - name: Build
@@ -67,7 +73,7 @@ jobs:
         shell: bash
         run: |
           curl -sL "https://github.com/Tracktion/pluginval/releases/latest/download/${{ matrix.pluginval }}" -o pluginval.zip
-          7z x pluginval.zip -opluginval
+          7z x pluginval.zip -opluginval || unzip -q pluginval.zip -d pluginval
 
       - name: Validate VST3
         shell: bash
@@ -101,7 +107,7 @@ jobs:
             ninja-build libasound2-dev libjack-jackd2-dev \
             libfreetype-dev libfontconfig1-dev \
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
-            libxinerama-dev libxrandr-dev libxrender-dev \
+            libxi-dev libxinerama-dev libxrandr-dev libxrender-dev \
             libglu1-mesa-dev mesa-common-dev
 
       - name: Cache JUCE checkout
