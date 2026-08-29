@@ -528,14 +528,40 @@ void ScopeComponent::paint (juce::Graphics& g)
         const auto side = juce::jmin (bounds.getWidth(), bounds.getHeight()) - 80.0f;
         const auto plot = juce::Rectangle<float> { side, side }.withCentre (bounds.getCentre());
 
+        // Deliberately a guide rather than a plot. The engine's curve is
+        // 1 - t^p, which has a single knee; what is drawn is that half-curve
+        // together with its own 180-degree rotation about the centre of the
+        // square, so it has two. That is the shape the control *sounds* like --
+        // a break that arrives late and eases out, or one that slams in and
+        // holds -- and at the extremes it squares off into a step, which is
+        // exactly what those settings do to the audio.
+        //
+        // The doubling is exact at the joins and cannot change the ends: both
+        // halves meet at (0.5, 0.5), the curve still leaves (0,0) and arrives at
+        // (1,1), and at SHAPE 0 the exponent is 1 and both halves collapse back
+        // onto the same straight diagonal. So the reading "left of centre is
+        // gentler, right of centre is harder" stays honest even though the
+        // curvature is not the transfer function.
+        const auto doubled = [this] (float t)
+        {
+            const auto closed = [this] (float u) { return 1.0f - shapeCurve.lid (u); };
+
+            return t < 0.5f ? 0.5f * closed (2.0f * t)
+                            : 1.0f - 0.5f * closed (2.0f * (1.0f - t));
+        };
+
         juce::Path curve;
 
-        for (int i = 0; i <= 256; ++i)
+        // Dense, because at the extremes the exponent puts almost all of the
+        // travel into a few percent of the width and a coarse polyline visibly
+        // cuts the corner off.
+        constexpr int steps = 512;
+
+        for (int i = 0; i <= steps; ++i)
         {
-            const auto t = (float) i / 256.0f;
-            const auto closed = 1.0f - shapeCurve.lid (t);
+            const auto t = (float) i / (float) steps;
             const juce::Point<float> point { plot.getX() + t * side,
-                                             plot.getBottom() - closed * side };
+                                             plot.getBottom() - doubled (t) * side };
 
             i == 0 ? curve.startNewSubPath (point) : curve.lineTo (point);
         }
