@@ -182,6 +182,19 @@ struct Params
     int poles = 2;             // 1..8
     bool clip = true;          // true = clip ceiling, false = VCA multiply
     bool filterPost = false;   // rectifier order
+
+    // setParams() re-derives filter coefficients (a tan and four sins per
+    // channel), so the processor skips it when the block changed nothing.
+    // Exact equality is the point here: this asks "did the host hand us the
+    // identical bits again", not "are these two settings musically alike".
+#if defined (__clang__) || defined (__GNUC__)
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wfloat-equal"
+#endif
+    bool operator== (const Params&) const = default;
+#if defined (__clang__) || defined (__GNUC__)
+ #pragma GCC diagnostic pop
+#endif
 };
 
 class Engine
@@ -203,6 +216,14 @@ public:
 
         std::fill (lids.begin(), lids.end(), 1.0f);
         std::fill (detectors.begin(), detectors.end(), 0.0f);
+    }
+
+    // HQ switches the oversampling factor, which changes the rate the filter
+    // coefficients were designed for. Allocation-free: the vectors keep their size.
+    void setSampleRate (double newSampleRate)
+    {
+        sampleRate = newSampleRate;
+        setParams (params);
     }
 
     void setParams (const Params& p)

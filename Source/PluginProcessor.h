@@ -86,14 +86,61 @@ public:
     std::atomic<float> gainReduction { 0.0f }; // 0 = lid open, 1 = fully shut
 
 private:
-    static constexpr int oversampleFactorLog2 = 3; // 8x -- SPEC 4.1
-    static constexpr int oversampleFactor = 1 << oversampleFactorLog2;
+    // Both paths run at 8x, and tests/alias.cpp says both need to.
+    //
+    // Carrier: the hard clipper's alias floor is -32 dB at 1x, -48 at 2x, -60 at
+    // 4x, -69 at 8x. Every halving costs about 9 dB.
+    //
+    // Detector: the rectifier's own floor bottoms out sooner, so running it
+    // slower and interpolating the lid up to the carrier's rate looks tempting.
+    // It is not -- the interpolation's images land on the decimator's fold
+    // points, and 2x + interpolation measures -53 dB against 8x's -85 dB. The
+    // lid has to be computed at the rate it is used at.
+    static constexpr int hqFactorLog2 = 3; // 8x -- SPEC 4.1
+    static constexpr int hqFactor = 1 << hqFactorLog2;
+
+    // HQ off: 4x, and minimum phase instead of linear. Measured -60 dB of alias
+    // floor against HQ's -69 dB, for about a third of the CPU. The polyphase IIR
+    // is both cheaper and slightly cleaner than the FIR at the same factor; what
+    // it costs is linear phase, which is a fair thing to spend in an eco mode.
+    static constexpr int ecoFactorLog2 = 2; // 4x
+    static constexpr int ecoFactor = 1 << ecoFactorLog2;
 
     void pullParameters();
 
     hardcap::Engine engine;
     juce::AudioBuffer<float> detector;
-    std::unique_ptr<juce::dsp::Oversampling<float>> carrierOs, detectorOs;
+
+    // Both configurations are built up front so that toggling HQ never allocates
+    // on the audio thread.
+    std::unique_ptr<juce::dsp::Oversampling<float>> carrierOsHq, detectorOsHq,
+                                                    carrierOsEco, detectorOsEco;
+
+    // Eco's oversamplers are shorter than HQ's, so the output is padded back out
+    // to the same total. Reported latency then never changes and the host is
+    // never asked to renegotiate PDC just because someone hit the button.
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> ecoPad { 512 };
+    int ecoPadSamples = 0;
+    bool lastHq = true;
+    double baseSampleRate = 44100.0;
+
+    // Linear phase and minimum phase do not line up, so swapping cascades steps
+    // the output no matter how carefully the new one is primed. Duck across the
+    // change instead: cheaper than running both paths for a block, and a short
+    // dip is far less objectionable than a click.
+    float switchGain = 1.0f;
+    float switchRampStep = 1.0f;
+
+    // Samples to stay silent after the swap. The padding delay line changes tap
+    // at the same moment, so for a short while it is still handing back audio the
+    // old path produced -- coming back up before that flushes splices the two
+    // together, which is the very click the duck exists to hide.
+    int switchHold = 0;
+
+    // Last values pushed to the engine, so an unchanged block skips the
+    // coefficient maths entirely.
+    hardcap::Params lastParams;
+    bool haveLastParams = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardCapProcessor)
 };

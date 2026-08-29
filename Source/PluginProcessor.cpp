@@ -14,6 +14,7 @@ namespace ids
     constexpr auto filterPos = "filterpos";
     constexpr auto scLink    = "sclink";
     constexpr auto scSource  = "scsource";
+    constexpr auto hq        = "hq";
 }
 
 // The FILTER sweep tops out at 20 kHz and the top detent is OFF: Nyquist at
@@ -88,6 +89,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
         ParameterID { ids::scSource, 1 }, "Sidechain Source",
         StringArray { "EXT", "INT" }, 0));
 
+    // On by default: nobody should have to find a button to get the good version.
+    layout.add (std::make_unique<AudioParameterBool> (
+        ParameterID { ids::hq, 1 }, "HQ", true));
+
     return layout;
 }
 
@@ -122,26 +127,45 @@ bool HardCapProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     const auto numCh = juce::jmax (1, getMainBusNumInputChannels());
-
-    engine.prepare (sampleRate * oversampleFactor, numCh);
+    baseSampleRate = sampleRate;
 
     detector.setSize (numCh, maximumExpectedSamplesPerBlock, false, true, false);
     detector.clear();
 
     using OS = juce::dsp::Oversampling<float>;
-    carrierOs = std::make_unique<OS> ((size_t) numCh, oversampleFactorLog2,
-                                      OS::filterHalfBandFIREquiripple, true, true);
-    detectorOs = std::make_unique<OS> ((size_t) numCh, oversampleFactorLog2,
-                                       OS::filterHalfBandFIREquiripple, true, true);
 
-    carrierOs->initProcessing ((size_t) maximumExpectedSamplesPerBlock);
-    detectorOs->initProcessing ((size_t) maximumExpectedSamplesPerBlock);
-    carrierOs->reset();
-    detectorOs->reset();
+    const auto build = [&] (int log2Factor, OS::FilterType type)
+    {
+        auto os = std::make_unique<OS> ((size_t) numCh, log2Factor, type, true, true);
+        os->initProcessing ((size_t) maximumExpectedSamplesPerBlock);
+        os->reset();
+        return os;
+    };
 
-    // The detector oversampler only ever runs its up path, so its group delay
-    // matches the carrier's up path and the two stay sample-aligned.
-    setLatencySamples (juce::roundToInt (carrierOs->getLatencyInSamples()));
+    carrierOsHq   = build (hqFactorLog2,  OS::filterHalfBandFIREquiripple);
+    detectorOsHq  = build (hqFactorLog2,  OS::filterHalfBandFIREquiripple);
+    carrierOsEco  = build (ecoFactorLog2, OS::filterHalfBandPolyphaseIIR);
+    detectorOsEco = build (ecoFactorLog2, OS::filterHalfBandPolyphaseIIR);
+
+    const auto hqLatency = juce::roundToInt (carrierOsHq->getLatencyInSamples());
+    const auto ecoLatency = juce::roundToInt (carrierOsEco->getLatencyInSamples());
+    ecoPadSamples = juce::jlimit (0, 512, hqLatency - ecoLatency);
+
+    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) maximumExpectedSamplesPerBlock,
+                                  (juce::uint32) numCh };
+    ecoPad.prepare (spec);
+    ecoPad.reset();
+
+    switchGain = 1.0f;
+    switchRampStep = 1.0f / juce::jmax (1.0f, 0.004f * (float) sampleRate); // ~4 ms
+    lastHq = apvts.getRawParameterValue (ids::hq)->load() > 0.5f;
+    engine.prepare (sampleRate * (lastHq ? hqFactor : ecoFactor), numCh);
+    haveLastParams = false;
+
+    // Within either mode the detector oversampler only ever runs its up path, so
+    // its group delay matches the carrier's up path and the two stay aligned.
+    // Across modes the eco path is padded, so this figure never moves.
+    setLatencySamples (hqLatency);
 
     pullParameters();
 }
@@ -167,6 +191,12 @@ void HardCapProcessor::pullParameters()
     p.clip = raw (ids::clip) > 0.5f;
     p.filterPost = raw (ids::filterPos) > 0.5f;
 
+    if (haveLastParams && p == lastParams)
+        return;
+
+    lastParams = p;
+    haveLastParams = true;
+
     engine.setParams (p);
 
     ceilingLinear.store (engine.getParams().ceilingLin, std::memory_order_relaxed);
@@ -183,7 +213,7 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const auto numCh = main.getNumChannels();
     const auto numSamples = buffer.getNumSamples();
 
-    if (numCh <= 0 || numSamples <= 0 || carrierOs == nullptr)
+    if (numCh <= 0 || numSamples <= 0 || carrierOsHq == nullptr)
         return;
 
     // Hosts are contractually bound to maximumExpectedSamplesPerBlock, but a few
@@ -196,13 +226,54 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     pullParameters();
 
+    // ---- HQ ---------------------------------------------------------------
+    // The swap only happens once the duck has reached silence, and only on a
+    // block boundary. Toggling back before then simply cancels the duck.
+    const auto hq = apvts.getRawParameterValue (ids::hq)->load() > 0.5f;
+
+    if (hq != lastHq && switchGain <= 0.0f)
+    {
+        lastHq = hq;
+        engine.reset();
+        engine.setSampleRate (baseSampleRate * (hq ? hqFactor : ecoFactor));
+
+        // The path being switched to has been sitting idle with stale state.
+        (hq ? *carrierOsHq : *carrierOsEco).reset();
+        (hq ? *detectorOsHq : *detectorOsEco).reset();
+
+        ecoPad.reset();
+        switchHold = ecoPadSamples + 128; // pad flush, plus the cascade filling
+    }
+
+    const auto ducking = (hq != lastHq);
+    const auto factor = lastHq ? hqFactor : ecoFactor;
+    auto& carrierOs = lastHq ? *carrierOsHq : *carrierOsEco;
+    auto& detectorOs = lastHq ? *detectorOsHq : *detectorOsEco;
+
     const auto useInternal = apvts.getRawParameterValue (ids::scSource)->load() > 0.5f;
     const auto sumToMono = apvts.getRawParameterValue (ids::scLink)->load() < 0.5f;
 
     // ---- build the detector source ---------------------------------------
     const auto scChannels = useInternal ? numCh : sidechain.getNumChannels();
 
-    for (int ch = 0; ch < numCh; ++ch)
+    // The detector's upsampler is about a third of this plugin's CPU, and in
+    // several routings it is being asked for something we already have. Both
+    // shortcuts below are exact -- tests/host_test.cpp checks them bit for bit
+    // against the long way round.
+    //
+    // A mono sum, a mono sidechain and an unrouted one all put the same signal
+    // on every detector channel, so only one of them is worth upsampling.
+    const auto sharedDetector = sumToMono || scChannels <= 1;
+
+    // With INT and no mono sum the detector IS the main input, and both
+    // oversamplers are the same design -- so the carrier's upsampled block is
+    // already the answer. Reading and writing one index in a single step is
+    // safe, which is what lets the two share a buffer.
+    const auto reuseCarrier = useInternal && scChannels > 0 && ! (sumToMono && scChannels > 1);
+
+    const auto detectorChannels = sharedDetector ? 1 : numCh;
+
+    for (int ch = 0; ! reuseCarrier && ch < detectorChannels; ++ch)
     {
         auto* dst = detector.getWritePointer (ch);
 
@@ -231,12 +302,7 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     // ---- 8x oversampled section ------------------------------------------
     auto carrierBlock = juce::dsp::AudioBlock<float> (main).getSubBlock (0, (size_t) numSamples);
-    auto detectorBlock = juce::dsp::AudioBlock<float> (detector)
-                             .getSubsetChannelBlock (0, (size_t) numCh)
-                             .getSubBlock (0, (size_t) numSamples);
-
-    auto osCarrier = carrierOs->processSamplesUp (carrierBlock);
-    auto osDetector = detectorOs->processSamplesUp (detectorBlock);
+    auto osCarrier = carrierOs.processSamplesUp (carrierBlock);
 
     const auto osSamples = osCarrier.getNumSamples();
 
@@ -244,17 +310,32 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const float* detectorPtr[2] { nullptr, nullptr };
 
     for (int ch = 0; ch < numCh && ch < 2; ++ch)
-    {
         carrierPtr[ch] = osCarrier.getChannelPointer ((size_t) ch);
-        detectorPtr[ch] = osDetector.getChannelPointer ((size_t) ch);
+
+    if (reuseCarrier)
+    {
+        for (int ch = 0; ch < numCh && ch < 2; ++ch)
+            detectorPtr[ch] = carrierPtr[ch];
+    }
+    else
+    {
+        auto detectorBlock = juce::dsp::AudioBlock<float> (detector)
+                                 .getSubsetChannelBlock (0, (size_t) detectorChannels)
+                                 .getSubBlock (0, (size_t) numSamples);
+
+        auto osDetector = detectorOs.processSamplesUp (detectorBlock);
+
+        for (int ch = 0; ch < numCh && ch < 2; ++ch)
+            detectorPtr[ch] = osDetector.getChannelPointer ((size_t) (sharedDetector ? 0 : ch));
     }
 
     auto lidMin = 1.0f;
     auto blockLidMin = 1.0f;
+    const auto channels = juce::jmin (numCh, 2);
 
     for (size_t i = 0; i < osSamples; ++i)
     {
-        for (int ch = 0; ch < numCh && ch < 2; ++ch)
+        for (int ch = 0; ch < channels; ++ch)
             carrierPtr[ch][i] = engine.processSample (ch, carrierPtr[ch][i], detectorPtr[ch][i]);
 
         const auto lid = engine.lastLid (0);
@@ -263,14 +344,49 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
         // One scope frame per base-rate sample, taking the most closed lid of
         // the group so the aperture never looks wider than it really was.
-        if ((i % (size_t) oversampleFactor) == (size_t) oversampleFactor - 1)
+        if ((i % (size_t) factor) == (size_t) factor - 1)
         {
             scope.push ({ engine.lastDetector (0), lidMin, carrierPtr[0][i] });
             lidMin = 1.0f;
         }
     }
 
-    carrierOs->processSamplesDown (carrierBlock);
+    carrierOs.processSamplesDown (carrierBlock);
+
+    // Pad eco back out to HQ's latency so the reported figure never changes.
+    // Fed in both modes, so the buffer is always warm when the mode flips.
+    ecoPad.setDelay ((float) (lastHq ? 0 : ecoPadSamples));
+
+    auto gainAfterBlock = switchGain;
+    auto holdAfterBlock = switchHold;
+
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        auto* d = main.getWritePointer (ch);
+        auto gain = switchGain;
+        auto hold = switchHold;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            ecoPad.pushSample (ch, d[i]);
+
+            const auto target = (ducking || hold > 0) ? 0.0f : 1.0f;
+
+            if (hold > 0)
+                --hold;
+
+            gain = target > gain ? juce::jmin (target, gain + switchRampStep)
+                                 : juce::jmax (target, gain - switchRampStep);
+
+            d[i] = ecoPad.popSample (ch) * gain;
+        }
+
+        gainAfterBlock = gain;
+        holdAfterBlock = hold;
+    }
+
+    switchGain = gainAfterBlock;
+    switchHold = holdAfterBlock;
 
     gainReduction.store (1.0f - blockLidMin, std::memory_order_relaxed);
 

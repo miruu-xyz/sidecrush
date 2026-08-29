@@ -92,3 +92,38 @@ target_compile_options(hardcap_host_test PRIVATE
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
 
 add_test(NAME host COMMAND hardcap_host_test)
+
+#===============================================================================
+# DSP measurement tools. Neither is a test, and both are kept out of the default
+# build -- CI would otherwise link two more JUCE console apps on every runner for
+# numbers nobody reads there. Build them by hand when touching the DSP:
+#
+#   cmake --build build --target hardcap_bench hardcap_alias
+#
+# bench  -- where the CPU goes, HQ on vs off, and the HQ switch's continuity.
+# alias  -- what each oversampling factor and filter choice is actually buying.
+juce_add_console_app(hardcap_bench PRODUCT_NAME "hardcap_bench")
+
+target_sources(hardcap_bench PRIVATE tests/bench.cpp)
+
+target_link_libraries(hardcap_bench PRIVATE
+    HardCap
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+target_compile_options(hardcap_bench PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
+
+# Aliasing measurement, same deal -- build and run by hand.
+juce_add_console_app(hardcap_alias PRODUCT_NAME "hardcap_alias")
+target_sources(hardcap_alias PRIVATE tests/alias.cpp)
+target_link_libraries(hardcap_alias PRIVATE
+    HardCap juce::juce_audio_utils juce::juce_dsp
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+target_compile_options(hardcap_alias PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-macro-redefined>)
+
+set_target_properties(hardcap_bench hardcap_alias PROPERTIES EXCLUDE_FROM_ALL TRUE)
+

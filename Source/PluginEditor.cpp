@@ -112,7 +112,9 @@ void HardCapLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
 //==============================================================================
 ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p)
 {
-    startTimerHz (60);
+    // 30 is plenty for a scope and costs half of 60. This timer runs for as long
+    // as the editor is open, whether or not the host is playing anything.
+    startTimerHz (30);
 }
 
 void ScopeComponent::timerCallback()
