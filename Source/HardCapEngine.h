@@ -274,7 +274,6 @@ public:
         const auto intensity = std::clamp (params.wtfIntensity, 0.0f, 1.0f);
         splitAmount = std::min (1.0f, 2.0f * intensity);
         midBlend = std::max (0.0f, 2.0f * intensity - 1.0f);
-        sideGain = 1.0f + midBlend;
 
         for (auto& f : filters)
             f.setup (params.filterHz, params.poles, sampleRate);
@@ -429,13 +428,13 @@ public:
             // side out first is what keeps this from being an ordinary widener
             // bolted to the output -- material the lid is not touching comes
             // through untouched however far this is pushed.
-            if (sideGain > 1.0f)
-            {
-                const auto invented = 0.5f * ((outL - outR) - (monoL - monoR));
-                const auto extra = (sideGain - 1.0f) * invented;
-                outL += extra;
-                outR -= extra;
-            }
+            //
+            // midBlend is the width too: the side ends up at 1 + midBlend times
+            // the invented one, so 100% is the double width SPEC 4.5 stops at.
+            const auto invented = 0.5f * ((outL - outR) - (monoL - monoR));
+            const auto extra = midBlend * invented;
+            outL += extra;
+            outR -= extra;
         }
 
         // Above 50% neither channel is clamped to the lid any more -- one of them
@@ -480,8 +479,7 @@ private:
     // WTF intensity, split into the two things it moves. Both are 0 at 50%,
     // which is why that setting is the original WTF exactly. See setParams.
     float splitAmount = 1.0f; // 0 = no split (MONO), 1 = the full split
-    float midBlend = 0.0f;    // 1 = the mid is what MONO would have made
-    float sideGain = 1.0f;    // 2 = the invented side at double width, at 100%
+    float midBlend = 0.0f;    // 1 = mid replaced by MONO's, invented side x2
 };
 
 } // namespace hardcap

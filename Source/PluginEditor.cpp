@@ -1000,7 +1000,18 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
       quality (p, ids::quality, Pill::Gesture::cycle),
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
       source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL"),
-      wtfInt (p, ids::wtfInt, Pill::Gesture::drag, "WTF")
+      wtfInt (p, ids::wtfInt, Pill::Gesture::drag, "WTF"),
+      linkWatch (*p.apvts.getParameter (ids::scLink),
+                 [this] (float value)
+                 {
+                     const auto shouldShow = juce::roundToInt (value) == sclink::wtf;
+
+                     if (shouldShow == wtfInt.isVisible())
+                         return;
+
+                     wtfInt.setVisible (shouldShow);
+                     resized(); // SCALE re-centres on its own when it loses its neighbour
+                 })
 {
     // The choice names itself, so nothing has to override the text. What the
     // design does say is that the three states are not equals: HQ is the live
@@ -1026,22 +1037,16 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
         static const juce::StringArray items { "0% - Boring MONO :(",
                                                "50% - L/R independent clipping :3",
                                                "100% - Phase cancellation carnage B)" };
-        static constexpr float values[] { 0.0f, 50.0f, 100.0f };
 
         auto& param = *p.apvts.getParameter (ids::wtfInt);
         const auto current = juce::roundToInt (param.convertFrom0to1 (param.getValue()));
 
-        auto match = -1;
-
-        for (auto i = 0; i < (int) std::size (values); ++i)
-            if (current == juce::roundToInt (values[i]))
-                match = i;
-
-        showPillMenu (wtfInt, items, match,
+        // The three are 50% apart, so the tick is arithmetic rather than a scan.
+        showPillMenu (wtfInt, items, current % 50 == 0 ? current / 50 : -1,
                       [&param] (int choice)
                       {
                           param.beginChangeGesture();
-                          param.setValueNotifyingHost (param.convertTo0to1 (values[choice]));
+                          param.setValueNotifyingHost (param.convertTo0to1 ((float) (choice * 50)));
                           param.endChangeGesture();
                       });
     };
@@ -1049,20 +1054,7 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
     for (auto* pill : { &link, &quality, &filterPos, &source, &scale, &wtfInt })
         addAndMakeVisible (pill);
 
-    linkWatch = std::make_unique<juce::ParameterAttachment> (
-        *p.apvts.getParameter (ids::scLink),
-        [this] (float value)
-        {
-            const auto shouldShow = juce::roundToInt (value) == sclink::wtf;
-
-            if (shouldShow == wtfInt.isVisible())
-                return;
-
-            wtfInt.setVisible (shouldShow);
-            resized(); // SCALE re-centres on its own when it loses its neighbour
-        });
-
-    linkWatch->sendInitialUpdate();
+    linkWatch.sendInitialUpdate();
 }
 
 void SettingsPanel::paint (juce::Graphics& g)

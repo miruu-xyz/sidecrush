@@ -219,7 +219,7 @@ Replacing the mid costs the mode its stereo *position* (see below), so the same 
 
 **What it scales is only the side the effect invented.** The pair's own stereo image is already in the mono-processed pair the mid is built from, and that side is subtracted out before the scaling and added back after. Without that step this would be an ordinary widener bolted to the output, which would pull an already-stereo input apart whenever the plugin was idling. With it, material the lid is not touching comes through untouched — checked in `tests/engine_test.cpp`.
 
-It stops at ×2, which is where an Utility's own control stops and also, by measurement, exactly where the invented side starts overtaking the carrier. Measured on a 0.9 carrier with the ceiling at −9 dB:
+It stops at ×2, which is where an Utility's own control stops and also, by measurement, exactly where the invented side starts overtaking the carrier. Measured **in PRE**, on a 0.9 carrier with the ceiling at −9 dB:
 
 | side gain | interchannel correlation | side/mid | peak |
 |---|---|---|---|
@@ -228,7 +228,36 @@ It stops at ×2, which is where an Utility's own control stops and also, by meas
 | **×2** | **−0.74** | **2.58** | **0.90** |
 | ×3 | −0.88 | 3.87 | 1.35 |
 
-Below ×2 the invented side is smaller than the carrier and the peak does not move at all; above it the side takes over and the peak climbs with the gain. So the top of the dial is the last setting that costs no headroom.
+Below ×2 the invented side is smaller than the carrier and the peak does not move at all; above it the side takes over and the peak climbs with the gain. So the top of the dial is the last setting that costs no headroom — **in PRE**. The next section is why that qualifier is there.
+
+#### The headroom claim is a property of PRE, not of the width
+
+Write `lL`, `lR` for the two split lids and `lM` for the mono one. At 100 % the whole pair collapses to
+
+```
+out_L = d_L·lL + d_R·(lM − lR)
+out_R = d_R·lR + d_L·(lM − lL)
+```
+
+so the most the peak can grow is `max(lL + |lR − lM|, lR + |lL − lM|)`.
+
+**In PRE that factor is identically 1**, structurally and at every sample. The split there is exact: one of the two halves is always zero, so one lid is wide open at 1 and the other *is* `lM`. Substituting gives `lM + (1 − lM)` and `1 + 0`. The coefficients are a convex combination of the two carriers, so the output peak cannot exceed the input peak — for any material, at any setting. The table above is that theorem, measured.
+
+**In POST nothing ties the three lids together**, and the factor drifts off 1 in both directions:
+
+- the two half-wave envelopes overlap once they are smoothed, so `lM`'s detector — their sum — exceeds both halves and `lM` closes further than either lid;
+- the Butterworth ringing of 4.3 can put one half-envelope below zero, so the sum falls *under* the other half and `lM` sits **above** a channel lid instead.
+
+The factor tops out at 2, i.e. +6 dB, and gets there in practice. Same carrier, decorrelated:
+
+| detector | max factor | output peak (input 0.900) |
+|---|---|---|
+| PRE, any setting | **1.000** | 0.900 |
+| POST 400 Hz 2-pole, INSTANT floor | 1.032 | 0.924 |
+| POST 200 Hz 4-pole, floor −12 dB | 1.404 | 1.226 |
+| POST 20 Hz 8-pole, narrow window | 2.000 | 1.793 |
+
+This is accepted rather than corrected. The guarantee this mode actually makes still holds in POST — the mono sum is exactly MONO's output and is still bounded by MONO's own ceiling; it is the *per-channel* peak that moves, and the per-channel ceiling is something this half of the dial has already given up (see the consequences listed below). Capping the width per sample would mean a divide in the 8× oversampled inner loop and a width that modulates with the sidechain, which is a worse trade than trimming OUTPUT. `tests/engine_test.cpp` pins the PRE invariant at exactly 1 so a change to the detector maths cannot quietly break the half that is guaranteed.
 
 #### Why width and not a level difference
 

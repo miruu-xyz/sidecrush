@@ -395,16 +395,19 @@ void wtfIntensityEndpoints()
 // would wreck an already-stereo input the moment the plugin was idling.
 void wtfWidthLeavesMonoAndDryAlone()
 {
+    for (const auto post : { false, true })
     for (const auto clip : { false, true })
     {
-        const auto params = [clip] (float intensity)
+        const auto params = [post, clip] (float intensity)
         {
             auto p = baseParams();
             p.wtf = true;
             p.wtfIntensity = intensity;
             p.clip = clip;
             p.ceilingLin = 0.35f;
-            p.filterHz = 0.0f;
+            p.filterPost = post;
+            p.filterHz = post ? 200.0f : 0.0f;
+            p.poles = post ? 4 : 2;
             return p;
         };
 
@@ -423,6 +426,10 @@ void wtfWidthLeavesMonoAndDryAlone()
         // different signals, which is true in every mode.
         auto sideWide = 0.0, midWide = 0.0, sidePlain = 0.0, midPlain = 0.0;
 
+        // The loudest sample either channel reaches, against the 0.9 the carrier
+        // goes in at -- see the peak claim below.
+        auto peak = 0.0f;
+
         for (int i = 0; i < 4800; ++i)
         {
             const auto sc = 0.9f * (float) std::sin (2.0 * std::numbers::pi * 60.0 * i / 48000.0);
@@ -432,6 +439,8 @@ void wtfWidthLeavesMonoAndDryAlone()
 
             auto pl = carrierL (i), pr = carrierR (i);
             plain.processWtfPair (pl, pr, sc);
+
+            peak = std::fmax (peak, std::fmax (std::fabs (wl), std::fabs (wr)));
 
             sideWide += 0.25 * (double) (wl - wr) * (wl - wr);
             midWide += 0.25 * (double) (wl + wr) * (wl + wr);
@@ -451,6 +460,23 @@ void wtfWidthLeavesMonoAndDryAlone()
         // ramp is there. (wtfIntensityEndpoints already holds the other half of
         // the claim: that none of this moves the mono sum.)
         CHECK (std::sqrt (sideWide / midWide) > 1.5 * std::sqrt (sidePlain / midPlain));
+
+        // And what the widening costs in headroom -- SPEC 4.5. At 100% the pair
+        // is out_L = dL*lL + dR*(lM - lR), out_R = dR*lR + dL*(lM - lL), so the
+        // peak can grow by at most max(lL + |lR - lM|, lR + |lL - lM|).
+        //
+        // In PRE that factor is 1 at every sample and the peak cannot move at
+        // all: one half of the split is always zero, so one lid is wide open and
+        // the other IS lM, which leaves a convex combination of the two
+        // carriers. That is the invariant worth pinning -- it is a property of
+        // the detector maths, so a change there would break it silently.
+        //
+        // POST unties the three lids and the factor drifts off 1, as far as 2.
+        // Not corrected, only bounded: all three lids are in [0, 1], so double
+        // is the most it can ever be, and a POST run that came back above that
+        // would mean the arithmetic itself had gone wrong rather than the
+        // detector merely disagreeing with itself.
+        CHECK (peak <= (post ? 2.0f : 1.0f) * 0.9f + tol);
     }
 }
 

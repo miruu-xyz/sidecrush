@@ -307,7 +307,7 @@ private:
     // A ParameterAttachment rather than the editor's timer, for the reason the
     // Pill gives: the host can move SC LINK from the audio thread, and this is
     // the one mechanism that marshals it without allocating per change.
-    std::unique_ptr<juce::ParameterAttachment> linkWatch;
+    juce::ParameterAttachment linkWatch;
 };
 
 //==============================================================================
