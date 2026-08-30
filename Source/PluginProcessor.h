@@ -59,7 +59,16 @@ struct ScopeFrame
 
 // Single producer (audio thread), single consumer (editor timer). The consumer
 // only ever reads the most recent frames, so a monotonic write index over a
-// power-of-two ring is enough -- no allocation, no locks, no blocking.
+// power-of-two ring is enough -- no locks, no blocking, and no allocation once
+// the ring is built.
+//
+// The ring is heap-held rather than inline because it is 640 KB and the
+// processor owns it by value: two processors as locals is 1.25 MB, which
+// overflows the 1 MB stack Windows gives the main thread and segfaults before
+// a single check runs. tests/host_test.cpp does exactly that in
+// dryPathIsAligned, so this is not hypothetical -- it is what CI hit the moment
+// ScopeFrame grew its second channel. Hosts allocate the processor themselves
+// and never noticed.
 //
 // ponytail: a torn frame is possible if the editor reads exactly as the audio
 // thread overwrites that slot. At 30 fps over a 32k ring that is one bad pixel
@@ -85,7 +94,7 @@ public:
     }
 
 private:
-    std::array<ScopeFrame, (size_t) capacity> buffer {};
+    std::vector<ScopeFrame> buffer = std::vector<ScopeFrame> ((size_t) capacity);
     std::atomic<int64_t> writePos { 0 };
 };
 
