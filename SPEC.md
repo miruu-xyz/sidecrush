@@ -200,18 +200,53 @@ The scope keeps drawing the bipolar detector in PRE, so in WTF its top lobe is t
 
 #### The WTF dial
 
-How far the mode is taken. It moves **two** things, one per half of its travel, and both are at rest at 50 % — which is why 50 % is the original behaviour to the sample.
+How far the mode is taken. It moves **three** things across two halves of travel, and all three are at rest at 50 % — which is why 50 % is the original behaviour to the sample.
 
-| | detector | mid |
-|---|---|---|
-| **0 %** | no split — both channels see the whole rectified sum | untouched |
-| **50 %** | the full split described above | untouched |
-| **100 %** | the full split | replaced by what MONO would have produced |
+| | detector | mid | invented side |
+|---|---|---|---|
+| **0 %** | no split — both channels see the whole rectified sum | untouched | ×1 |
+| **50 %** | the full split described above | untouched | ×1 |
+| **100 %** | the full split | replaced by what MONO would have produced | **×2** |
 
 - **0 % is MONO.** With both lids driven by the same detector the two channels agree, which is precisely what the MONO link does. The bottom of the dial and the middle position of the switch meet there deliberately: the dial spans MONO → WTF → the inverted mode, so what it selects between is legible without a manual.
 - **100 % makes the effect survive a mono speaker.** Below it, WTF *half-cancels* when summed: at any instant one channel is clipped and the other is not, so the sum keeps half of what the lid removed and a phone speaker hears a weaker version of the plugin than the room does. At 100 % the pair is slid until its mid is the mono result, so what a mono listener hears is **exactly** the MONO link — not an approximation of it — while the difference between the channels, which is the whole of the effect, is untouched and stays in the sides.
 
 The mechanism is phase cancellation, not clipping. The part of the carrier the lid removes is handed to *both* channels with opposite signs, so it is still there in stereo — wide, and on the wrong side of the lid — and annihilates on the way to mono. The clipping a mono listener hears is that annihilation, not either channel's own output.
+
+#### The width that rides the top half
+
+Replacing the mid costs the mode its stereo *position* (see below), so the same stretch of travel that replaces it also widens what is left. This is a width control in the mid/side sense — the same thing an Utility patched in after the plugin does — and it is mono-blind for exactly the reason the mode is: what it scales is added to one channel and subtracted from the other, so the sum never sees it. It rides the mid replacement rather than sitting on a dial of its own because it exists to pay for what that replacement costs; the two belong at the same end of the travel.
+
+**What it scales is only the side the effect invented.** The pair's own stereo image is already in the mono-processed pair the mid is built from, and that side is subtracted out before the scaling and added back after. Without that step this would be an ordinary widener bolted to the output, which would pull an already-stereo input apart whenever the plugin was idling. With it, material the lid is not touching comes through untouched — checked in `tests/engine_test.cpp`.
+
+It stops at ×2, which is where an Utility's own control stops and also, by measurement, exactly where the invented side starts overtaking the carrier. Measured on a 0.9 carrier with the ceiling at −9 dB:
+
+| side gain | interchannel correlation | side/mid | peak |
+|---|---|---|---|
+| ×1 | −0.25 | 1.29 | 0.90 |
+| ×1.5 | −0.58 | 1.93 | 0.90 |
+| **×2** | **−0.74** | **2.58** | **0.90** |
+| ×3 | −0.88 | 3.87 | 1.35 |
+
+Below ×2 the invented side is smaller than the carrier and the peak does not move at all; above it the side takes over and the peak climbs with the gain. So the top of the dial is the last setting that costs no headroom.
+
+#### Why width and not a level difference
+
+The width this adds is **decorrelation**, not panning, and it cannot be anything else. Exact mono cancellation means `out_L = M + d` and `out_R = M − d`, and two things follow from that form alone:
+
+- **`|out_L| = |out_R|` wherever `M = 0`.** `M` is the mono result, which is zero exactly when the lid is shut — the moments the effect peaks. So the interchannel *level* difference is structurally zero there, whatever `d` is.
+- **The correlation depends only on `⟨d²⟩/⟨M²⟩`.** The shape, spectrum and phase of `d` are invisible to it. Decorrelating `d` with allpasses moves the measured correlation by nothing; only its level does anything.
+
+This is why 50 % sounds like a wider *position* than 100 % does. At 50 % the lid closing to zero silences one channel outright while the other runs full — a 53 dB alternating level difference over 5 ms windows, which is the strongest lateralisation cue there is. At 100 % the same instant is `±d`: equal levels, opposite polarity, 0.3 dB. The two are different kinds of width and the dial does not morph between them, it trades one for the other. Scaling `d` is the only lever the arithmetic leaves, which is why the width rides that half of the travel — it is the compensation, not a separate idea.
+
+Measured across the dial, mono carrier:
+
+| intensity | correlation | short-term ILD | side/mid |
+|---|---|---|---|
+| 0 % | +1.00 | 0.0 dB | 0.00 |
+| 50 % | +0.28 | **53.2 dB** | 0.75 |
+| 75 % | −0.41 | 4.4 dB | 1.55 |
+| 100 % | **−0.74** | 0.3 dB | **2.58** |
 
 Two consequences follow and are accepted:
 

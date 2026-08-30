@@ -142,7 +142,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
     // this parameter appearing does not move any session that predates it. 0%
     // hands both channels the whole rectified sum, which is MONO; 100% cancels
     // the effect's leak into the mono sum, so a mono listener hears exactly the
-    // MONO result while the stereo image comes apart. See SPEC 4.5.
+    // MONO result while the stereo image comes apart, and the side the effect
+    // invented is widened on the way. See SPEC 4.5.
     //
     // Inert unless SC LINK is on WTF, which is why the editor only shows it
     // there -- but it stays a real parameter in every mode, because a host

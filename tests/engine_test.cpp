@@ -387,6 +387,73 @@ void wtfIntensityEndpoints()
     }
 }
 
+//==============================================================================
+// The top of the dial widens the side the effect invented. Two things have to
+// hold at once, and they pull in opposite directions: the mono sum must still
+// not move at all, and material the lid is not touching must come through
+// untouched -- otherwise this is just a widener bolted to the output, which
+// would wreck an already-stereo input the moment the plugin was idling.
+void wtfWidthLeavesMonoAndDryAlone()
+{
+    for (const auto clip : { false, true })
+    {
+        const auto params = [clip] (float intensity)
+        {
+            auto p = baseParams();
+            p.wtf = true;
+            p.wtfIntensity = intensity;
+            p.clip = clip;
+            p.ceilingLin = 0.35f;
+            p.filterHz = 0.0f;
+            return p;
+        };
+
+        const auto carrierL = [] (int i)
+        { return 0.9f * (float) std::sin (2.0 * std::numbers::pi * 700.0 * i / 48000.0); };
+
+        const auto carrierR = [] (int i)
+        { return 0.4f * (float) std::sin (2.0 * std::numbers::pi * 1100.0 * i / 48000.0 + 1.0); };
+
+        auto wide = makeEngine (params (1.0f));  // 100%: mid replaced, side doubled
+        auto plain = makeEngine (params (0.5f)); // 50%: neither
+        auto idle = makeEngine (params (1.0f));
+
+        // Side over mid, in energy -- the width metric that means anything here.
+        // A peak-difference measure would just report the two carriers being
+        // different signals, which is true in every mode.
+        auto sideWide = 0.0, midWide = 0.0, sidePlain = 0.0, midPlain = 0.0;
+
+        for (int i = 0; i < 4800; ++i)
+        {
+            const auto sc = 0.9f * (float) std::sin (2.0 * std::numbers::pi * 60.0 * i / 48000.0);
+
+            auto wl = carrierL (i), wr = carrierR (i);
+            wide.processWtfPair (wl, wr, sc);
+
+            auto pl = carrierL (i), pr = carrierR (i);
+            plain.processWtfPair (pl, pr, sc);
+
+            sideWide += 0.25 * (double) (wl - wr) * (wl - wr);
+            midWide += 0.25 * (double) (wl + wr) * (wl + wr);
+            sidePlain += 0.25 * (double) (pl - pr) * (pl - pr);
+            midPlain += 0.25 * (double) (pl + pr) * (pl + pr);
+
+            // Nothing on the sidechain, so the lid never leaves 1 and there is
+            // no invented side to scale. The width has to be a no-op here.
+            auto il = carrierL (i), ir = carrierR (i);
+            idle.processWtfPair (il, ir, 0.0f);
+
+            CHECK (near (il, carrierL (i)));
+            CHECK (near (ir, carrierR (i)));
+        }
+
+        // It does actually widen, and by a lot -- this is the whole reason the
+        // ramp is there. (wtfIntensityEndpoints already holds the other half of
+        // the claim: that none of this moves the mono sum.)
+        CHECK (std::sqrt (sideWide / midWide) > 1.5 * std::sqrt (sidePlain / midPlain));
+    }
+}
+
 } // namespace
 
 int main()
@@ -400,6 +467,7 @@ int main()
     postRectifyEnvelopeStaysValid();
     wtfSplitsBySign();
     wtfIntensityEndpoints();
+    wtfWidthLeavesMonoAndDryAlone();
 
     std::puts ("hardcap engine: all checks passed");
     return 0;

@@ -263,12 +263,18 @@ public:
         // MONO would have produced, which is what makes a mono sum cancel back
         // to the mono effect exactly.
         //
-        // 50% therefore lands on both endpoints of that pair at once -- split
-        // fully open, mid untouched -- so it is the original WTF to the sample,
-        // and a session saved before this dial existed still sounds like itself.
+        // Riding the second half with it: the width of the side the effect
+        // invents, up to double. It is on the same ramp rather than a dial of
+        // its own because it exists to answer the thing replacing the mid costs
+        // -- the level difference between the channels, which exact cancellation
+        // makes impossible -- so the two belong at the same end of the travel.
+        //
+        // 50% is the rest position of both, so it is the original WTF to the
+        // sample, and a session saved before this dial existed sounds the same.
         const auto intensity = std::clamp (params.wtfIntensity, 0.0f, 1.0f);
         splitAmount = std::min (1.0f, 2.0f * intensity);
         midBlend = std::max (0.0f, 2.0f * intensity - 1.0f);
+        sideGain = 1.0f + midBlend;
 
         for (auto& f : filters)
             f.setup (params.filterHz, params.poles, sampleRate);
@@ -406,11 +412,30 @@ public:
         if (midBlend > 0.0f)
         {
             const auto lidMono = lidFor (monoMag);
-            const auto correction = midBlend * 0.5f
-                                    * ((shaped (drivenL, lidMono) + shaped (drivenR, lidMono))
-                                       - (outL + outR));
+            const auto monoL = shaped (drivenL, lidMono);
+            const auto monoR = shaped (drivenR, lidMono);
+
+            const auto correction = midBlend * 0.5f * ((monoL + monoR) - (outL + outR));
             outL += correction;
             outR += correction;
+
+            // A width control in the mid/side sense -- the same thing a Utility
+            // dropped in after the plugin does, and mono-blind for the same
+            // reason: what it scales is added to one channel and subtracted from
+            // the other, so the sum never sees it.
+            //
+            // What it scales is only the side the *effect invented*. The pair's
+            // own stereo image is already in monoL/monoR, and subtracting that
+            // side out first is what keeps this from being an ordinary widener
+            // bolted to the output -- material the lid is not touching comes
+            // through untouched however far this is pushed.
+            if (sideGain > 1.0f)
+            {
+                const auto invented = 0.5f * ((outL - outR) - (monoL - monoR));
+                const auto extra = (sideGain - 1.0f) * invented;
+                outL += extra;
+                outR -= extra;
+            }
         }
 
         // Above 50% neither channel is clamped to the lid any more -- one of them
@@ -456,6 +481,7 @@ private:
     // which is why that setting is the original WTF exactly. See setParams.
     float splitAmount = 1.0f; // 0 = no split (MONO), 1 = the full split
     float midBlend = 0.0f;    // 1 = the mid is what MONO would have made
+    float sideGain = 1.0f;    // 2 = the invented side at double width, at 100%
 };
 
 } // namespace hardcap

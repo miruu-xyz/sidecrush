@@ -1033,7 +1033,7 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
 
         auto match = -1;
 
-        for (auto i = 0; i < 3; ++i)
+        for (auto i = 0; i < (int) std::size (values); ++i)
             if (current == juce::roundToInt (values[i]))
                 match = i;
 

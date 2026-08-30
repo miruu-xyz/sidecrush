@@ -53,6 +53,10 @@ By default everything runs at 8× oversampling: a hard clip whose threshold move
 
 The **WTF** dial next to it says how far to take that, and it spans further in both directions than the switch alone can. At 0% the split closes up and both channels get the same lid, which is MONO. 50% is the behaviour above, and the default. At 100% the plugin stops throwing away the part of the carrier the lid cuts and hands it to *both* channels with opposite signs instead — so in stereo it is still there, wide and on the wrong side of the lid, and on the way to mono it cancels. The point of that is what a mono listener hears: below 100% WTF half-cancels when summed, because at any instant one channel is clipped and the other is not, so a phone speaker gets a weaker plugin than the room does. At 100% the sum is *exactly* the MONO link while the stereo image comes apart. Right-click the dial for the three settings by name.
 
+The top half of that travel also **widens** what the effect invents, up to double — the same thing an Utility patched in after the plugin would do, and mono-blind for the same reason: what it scales goes to one channel and comes off the other, so the sum never sees it. What it scales is only the side the effect invented, not the side your input already had, so material the lid is not touching comes through untouched.
+
+That widening is there to pay for something. 50% sounds like a wider *position* than a bare 100% does, and that is not a bug: at 50% the lid closing to zero silences one channel outright — a 53 dB alternating level difference, the strongest lateralisation cue there is — and exact mono cancellation makes that impossible, because it forces the two channels to equal level and opposite sign at the moment the lid shuts. Decorrelation is the only kind of width the arithmetic leaves, so 100% takes as much of it as it can get without costing any headroom.
+
 ## Building
 
 Requires CMake 3.22+ and a C++20 compiler. JUCE 9.0.1 is fetched automatically.
