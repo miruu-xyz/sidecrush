@@ -47,7 +47,7 @@ xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/SideCrush.vst3
 
 **Important heads up:** this has only been tested on macOS, so I can't promise it runs smoothly on Windows or Linux — CI builds and validates both, but that isn't the same as someone actually using it. If you run into issues, flag them in this repo and I'll try to get to them ASAP.
 
-**Also:** this plugin is fully vibe coded. I provided the idea, the planning, and the UI/UX, but the code base is written by Claude. If you don't fuck with that, or you need the promise of stability, feel free to review the code and open a PR — or skip this one for now.
+**Also:** this plugin is fully vibe coded. I provided the idea, the planning, and the UI/UX, but the code base is written by Claude. If you don't want to work with that, or you need the promise of stability, feel free to review the code and open a PR — or skip this one for now.
 
 ## Usage
 
