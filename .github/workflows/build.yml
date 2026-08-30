@@ -77,11 +77,16 @@ jobs:
         if: runner.os == 'macOS'
         uses: seanmiddleditch/gha-setup-ninja@v6
 
+      # Keyed on the workspace path, not just the OS. FetchContent's sub-build
+      # writes absolute paths into its own CMakeCache, so a cache restored into
+      # a differently-named checkout fails configure outright -- which is what
+      # the hardcap -> sidecrush rename did. The path is part of what the cache
+      # is valid for, so it belongs in the key.
       - name: Cache JUCE checkout
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: ${{ runner.os }}-juce-9.0.1
+          key: ${{ runner.os }}-juce-9.0.1-${{ github.workspace }}
 
       # No -G Ninja on Windows: with Ninja on the PATH, CMake picks up MinGW
       # rather than MSVC and JUCE refuses to build. The default Visual Studio
@@ -171,7 +176,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-asan/_deps
-          key: Linux-juce-9.0.1-asan
+          key: Linux-juce-9.0.1-asan-${{ github.workspace }}
 
       # LTO and the sanitizers do not get along; the recommended flags enable it
       # in Release, so the sanitizer build runs as RelWithDebInfo without it.
