@@ -229,6 +229,64 @@ void postRectifyEnvelopeStaysValid()
     }
 }
 
+//==============================================================================
+// WTF gives the left channel the sidechain's positive half and the right its
+// negative half, so a sub going up shuts one side and going down shuts the
+// other. The panning is the whole point, so check the channels actually
+// disagree -- and that POST, where the rectifier could throw the sign away
+// before the split, still disagrees the same way.
+void wtfSplitsBySign()
+{
+    for (const auto post : { false, true })
+    {
+        auto p = baseParams();
+        p.wtf = true;
+        p.ceilingLin = 1.0f;
+        p.filterPost = post;
+        p.filterHz = 0.0f; // filter off: the split is what is under test, not it
+        auto e = makeEngine (p);
+
+        // Same summed sidechain into both channels, as processBlock feeds it.
+        const auto left = e.processSample (0, 1.0f, 0.8f);
+        const auto right = e.processSample (1, 1.0f, 0.8f);
+
+        // A positive sidechain closes the left and leaves the right wide open.
+        CHECK (near (left, 0.2f));
+        CHECK (near (right, 1.0f));
+
+        const auto leftDown = e.processSample (0, 1.0f, -0.8f);
+        const auto rightDown = e.processSample (1, 1.0f, -0.8f);
+
+        // And a negative one does the opposite. Neither is what STEREO would do,
+        // which rectifies and shuts both.
+        CHECK (near (leftDown, 1.0f));
+        CHECK (near (rightDown, 0.2f));
+    }
+
+    // POST filtering has to happen on the two halves separately: a shared
+    // envelope would move both channels together and there would be no pan left.
+    auto p = baseParams();
+    p.wtf = true;
+    p.ceilingLin = 1.0f;
+    p.filterPost = true;
+    p.filterHz = 200.0f;
+    p.poles = 2;
+    auto e = makeEngine (p);
+
+    auto widest = 0.0f;
+
+    for (int i = 0; i < 4800; ++i) // 100 cycles of a 100 Hz sine at 48 kHz
+    {
+        const auto sc = 0.9f * (float) std::sin (2.0 * std::numbers::pi * 100.0 * i / 48000.0);
+        e.processSample (0, 1.0f, sc);
+        const auto l = e.lastLid (0);
+        e.processSample (1, 1.0f, sc);
+        widest = std::fmax (widest, std::fabs (l - e.lastLid (1)));
+    }
+
+    CHECK (widest > 0.2f);
+}
+
 } // namespace
 
 int main()
@@ -240,6 +298,7 @@ int main()
     rectifierGivesTwoClosuresPerCycle();
     filterIsAStableLowpass();
     postRectifyEnvelopeStaysValid();
+    wtfSplitsBySign();
 
     std::puts ("hardcap engine: all checks passed");
     return 0;

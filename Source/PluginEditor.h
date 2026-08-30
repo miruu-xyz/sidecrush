@@ -38,6 +38,7 @@ namespace hccolour
     const juce::Colour clipOn      { 0xfff85050 };
     const juce::Colour clipBorder  { 0xffe73131 };
     const juce::Colour output      { 0xffdfdfdf }; // the post-lid trace
+    const juce::Colour yuck        { 0xff8d5c3d }; // the one warning tone here
     const juce::Colour belowFloor  { 0xff9e9e9e }; // sidechain where it is under
                                                    // the floor, doing nothing
 }
@@ -117,6 +118,12 @@ public:
     // stepping blindly through eight values.
     std::function<void()> onClick;
 
+    // Set to take over the right-click, whose default is to list the parameter's
+    // own choices. The two pills that override it are the ones a plain list would
+    // get wrong: SLOPE, which also has to switch the filter on, and SCALE, which
+    // has no parameter to list.
+    std::function<void()> onRightClick;
+
     std::function<void (bool)> onDragActive;
 
     // Decided at mouse-down, because a pill can act on something other than the
@@ -130,12 +137,20 @@ public:
     // a pill keeps the same look in both states.
     juce::Colour onTint { 0x00000000 };
 
-    // CLIP when off and LQ both read as a legend rather than a live value, so
-    // the design drops their text to the caption tone.
+    // CLIP when off reads as a legend rather than a live value, so the design
+    // drops its text to the caption tone.
     bool dimWhenOff = false;
 
+    // Set when a pill has more states than dimWhenOff can describe: QUALITY has
+    // three, and the design gives each of them its own tone.
+    std::function<juce::Colour()> textColour;
+
 private:
-    void drawLabel (juce::Graphics&, juce::String text, bool engaged, bool dormant);
+    void drawLabel (juce::Graphics&, juce::String text, juce::Colour);
+
+    // Right-click on anything backed by a list of choices: the whole list at
+    // once, so a three-way switch does not have to be cycled to be read.
+    void showChoiceMenu();
 
     juce::RangedAudioParameter* param = nullptr;
 
@@ -285,7 +300,7 @@ public:
     Pill scale;
 
 private:
-    Pill link, hq, filterPos, source;
+    Pill link, quality, filterPos, source;
 };
 
 //==============================================================================
@@ -315,6 +330,7 @@ private:
     void updateScopeOverlay();
     void showSlopeMenu();
     void applySlope (int index);
+    void showScaleMenu();
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 
@@ -344,6 +360,11 @@ private:
 
     // The FILTER readout relabels itself in POST, and nothing else repaints it.
     bool lastFilterPost = false;
+
+    // The FLOOR readout brackets its value once the ceiling is holding it down,
+    // so it repaints when the *ceiling* moves. Starts outside the range, so the
+    // first tick always syncs.
+    float lastCeilingDb = 1.0e9f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardCapEditor)
 };

@@ -200,6 +200,7 @@ struct Params
     int poles = 2;             // 1..8
     bool clip = true;          // true = clip ceiling, false = VCA multiply
     bool filterPost = false;   // rectifier order
+    bool wtf = false;          // split the summed sidechain: + shuts L, - shuts R
 };
 
 class Engine
@@ -231,11 +232,14 @@ public:
         setParams (params);
     }
 
-    // The window can never invert: SPEC 2, floor is clamped to ceiling - 1 dB.
-    // The editor draws the same clamp, so it lives here rather than inside
-    // setParams -- two copies of this number would drift apart silently, and the
-    // symptom would be a floor band that does not sit where the floor is.
-    static constexpr float floorHeadroom = 0.891250938f; // -1 dB
+    // The window can never invert, but it may be as narrow as the controls can
+    // ask for: one 0.1 dB step, which is the FLOOR parameter's own interval, so
+    // the two thresholds can be set to the nearest thing to identical the dial
+    // grid allows. The editor draws the same clamp and the FLOOR readout brackets
+    // its value once it bites, so this lives here rather than inside setParams --
+    // three copies of the number would drift apart silently.
+    static constexpr float floorHeadroomDb = -0.1f;
+    static constexpr float floorHeadroom = 0.988553095f; // 10^(-0.1/20)
 
     static constexpr float clampFloor (float floorLin, float ceilingLin) noexcept
     {
@@ -260,6 +264,13 @@ public:
     {
         auto& filter = filters[(size_t) channel];
 
+        // WTF hands both channels the same summed sidechain and gives each one
+        // half of it: the left is driven by its positive excursions, the right by
+        // its negative ones -- SPEC 4.5. Flipping the right channel's copy turns
+        // "the negative half" into "the positive half" and lets one half-wave
+        // rectifier serve both sides. A full-wave one would undo the split.
+        const auto sign = channel == 0 ? 1.0f : -1.0f;
+
         // Filter before rectifier keeps the detector at waveform rate. Reversing
         // them turns it into an envelope follower -- see SPEC 4.3.
         // In PRE the filtered signal is still bipolar, which is what the scope
@@ -270,15 +281,24 @@ public:
 
         if (params.filterPost)
         {
-            const auto env = std::max (0.0f, filter.process (std::abs (sc)));
+            // The split has to come first here: the rectifier is the thing that
+            // throws away the sign the split is made of. Two half-wave signals in
+            // means two envelopes out, one per side, which is what POST has to
+            // follow for the panning to survive the filter.
+            const auto rectified = params.wtf ? std::max (0.0f, sign * sc) : std::abs (sc);
+            const auto env = std::max (0.0f, filter.process (rectified));
             detectors[(size_t) channel] = env;
             mag = env;
         }
         else
         {
+            // PRE filters the bipolar sidechain, so the sign survives it and the
+            // split can happen after -- which is what keeps this at waveform rate.
+            // The detector stays bipolar so the scope draws the whole wave: in
+            // WTF its top lobe is the left channel and its bottom lobe the right.
             const auto filtered = filter.process (sc);
             detectors[(size_t) channel] = filtered;
-            mag = std::abs (filtered);
+            mag = params.wtf ? std::max (0.0f, sign * filtered) : std::abs (filtered);
         }
 
         const auto t = std::clamp ((mag - params.floorLin) * windowScale, 0.0f, 1.0f);

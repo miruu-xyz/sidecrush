@@ -13,6 +13,16 @@
 namespace
 {
 
+// Choice parameters take a normalised value, and the fraction that lands on a
+// given index moves whenever an option is added -- which is exactly how a
+// two-way switch grown to three silently redirects every existing call. Name
+// the index and let the parameter do the arithmetic.
+void setChoice (HardCapProcessor& p, const char* id, int index)
+{
+    auto* param = p.apvts.getParameter (id);
+    param->setValueNotifyingHost (param->convertTo0to1 ((float) index));
+}
+
 // Stereo in, stereo sidechain, stereo out -- what most of these tests want.
 juce::AudioProcessor::BusesLayout stereoLayout()
 {
@@ -105,8 +115,8 @@ void shortcutsAreExact()
 
         p.prepareToPlay (48000.0, blockSize);
 
-        p.apvts.getParameter ("scsource")->setValueNotifyingHost (internalSource ? 1.0f : 0.0f);
-        p.apvts.getParameter ("sclink")->setValueNotifyingHost (monoLink ? 0.0f : 1.0f);
+        setChoice (p, "scsource", internalSource ? 1 : 0);
+        setChoice (p, "sclink", monoLink ? sclink::mono : sclink::stereo);
 
         juce::AudioBuffer<float> buffer { 4, blockSize };
         juce::MidiBuffer midi;
@@ -165,20 +175,93 @@ void shortcutsAreExact()
         CHECK (juce::exactlyEqual (viaStereoLink[i], viaMonoLink[i]));
 }
 
-// HQ pads the eco path so the reported latency never changes. If that padding is
-// wrong the host's delay compensation is wrong, which is worse than the CPU it
-// saves -- so check where an impulse actually comes out in both modes.
-void hqLatencyIsConstant()
+// WTF only pans if the processor sums the sidechain the way MONO does *and*
+// tells the engine to split it -- two separate lines reading one parameter
+// index. Drive a sub through it and check the two outputs stop agreeing.
+void wtfPansTheCarrier()
+{
+    constexpr int bs = 512;
+
+    // The carrier gap the ears get, and the lid gap the scope draws from -- one
+    // run, because the second is only interesting where the first is happening.
+    struct Gaps { float carrier, lid; };
+
+    const auto widestChannelGap = [] (int link)
+    {
+        HardCapProcessor p;
+        CHECK (p.setBusesLayout (stereoLayout()));
+
+        p.prepareToPlay (48000.0, bs);
+        setChoice (p, "sclink", link);
+        p.apvts.getParameter ("ceiling")->setValueNotifyingHost (0.5f);
+
+        juce::AudioBuffer<float> buffer { 4, bs };
+        juce::MidiBuffer midi;
+        auto widest = 0.0f;
+        int n = 0;
+
+        for (int b = 0; b < 20; ++b)
+        {
+            for (int i = 0; i < bs; ++i, ++n)
+            {
+                // A 40 Hz sub on both sidechain channels, white-ish carrier.
+                const auto sub = 0.9f * (float) std::sin (2.0 * juce::MathConstants<double>::pi
+                                                          * 40.0 * n / 48000.0);
+                for (int ch = 0; ch < 2; ++ch)
+                    buffer.getWritePointer (ch)[i] = 0.8f;
+
+                buffer.getWritePointer (2)[i] = sub;
+                buffer.getWritePointer (3)[i] = sub;
+            }
+
+            p.processBlock (buffer, midi);
+
+            if (b < 4) // let the oversamplers fill before measuring
+                continue;
+
+            for (int i = 0; i < bs; ++i)
+                widest = juce::jmax (widest, std::abs (buffer.getReadPointer (0)[i]
+                                                       - buffer.getReadPointer (1)[i]));
+        }
+
+        // The editor draws one lid per side in WTF -- the top of the aperture is
+        // the left, the bottom the right -- so the frames have to carry both.
+        auto widestLid = 0.0f;
+
+        for (auto i = juce::jmax<int64_t> (0, p.scope.head() - bs); i < p.scope.head(); ++i)
+        {
+            const auto& f = p.scope.at (i);
+            widestLid = juce::jmax (widestLid, std::abs (f.lid - f.lidR));
+        }
+
+        return Gaps { widest, widestLid };
+    };
+
+    // STEREO fed identical channels has nothing to tell them apart.
+    const auto stereo = widestChannelGap (sclink::stereo);
+    CHECK (stereo.carrier < 1.0e-5f);
+    CHECK (juce::exactlyEqual (stereo.lid, 0.0f));
+
+    // WTF does: at the sub's peaks one lid is shut and the other wide open.
+    const auto wtf = widestChannelGap (sclink::wtf);
+    CHECK (wtf.carrier > 0.5f);
+    CHECK (wtf.lid > 0.5f);
+}
+
+// The cheaper modes are padded so the reported latency never changes. If that
+// padding is wrong the host's delay compensation is wrong, which is worse than
+// the CPU it saves -- so check where an impulse actually comes out in each mode.
+void qualityLatencyIsConstant()
 {
     constexpr int blockSize = 512;
 
-    const auto peakOffset = [] (bool hq)
+    const auto peakOffset = [] (int quality)
     {
         HardCapProcessor p;
         CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, blockSize);
-        p.apvts.getParameter ("hq")->setValueNotifyingHost (hq ? 1.0f : 0.0f);
+        setChoice (p, "quality", quality);
 
         CHECK (p.getLatencySamples() > 0);
 
@@ -188,8 +271,8 @@ void hqLatencyIsConstant()
         // The swap only lands once the duck has reached silence (~4 ms) and only
         // on a block boundary, and the output is then held down while the pad
         // flushes. Measuring straight away sends the impulse through the OLD
-        // path, merely ducked -- which measures HQ twice and never reads
-        // ecoPadSamples at all. Feed DC until that has all resolved.
+        // path, merely ducked -- which measures HQ three times and never reads
+        // padSamples at all. Feed DC until that has all resolved.
         for (int b = 0; b < 8; ++b)
         {
             buffer.clear();
@@ -234,22 +317,29 @@ void hqLatencyIsConstant()
         return std::pair { bestIndex, p.getLatencySamples() };
     };
 
-    const auto [hqPeak, hqReported] = peakOffset (true);
-    const auto [ecoPeak, ecoReported] = peakOffset (false);
+    const auto [hqPeak, hqReported] = peakOffset (0);
 
-    // The headline claim: toggling HQ does not move the reported latency.
-    CHECK (hqReported == ecoReported);
-    CHECK (ecoPeak > 0);
+    for (int quality = 1; quality <= 2; ++quality)
+    {
+        const auto [peak, reported] = peakOffset (quality);
 
-    // And the padding makes that honest -- the audio really does come out in the
-    // same place. Minimum phase is not flat delay, so allow a couple of samples.
-    CHECK (std::abs (hqPeak - ecoPeak) <= 2);
+        // The headline claim: changing quality does not move the reported latency.
+        CHECK (hqReported == reported);
+        CHECK (peak > 0);
+
+        // And the padding makes that honest -- the audio really does come out in
+        // the same place. Minimum phase is not flat delay, and YUCK has no
+        // anti-imaging filter at all, so allow a couple of samples either way.
+        CHECK (std::abs (hqPeak - peak) <= 2);
+    }
+
     CHECK (std::abs (hqPeak - hqReported) <= 2);
 }
 
 // Swapping oversampler cascades steps the output; the duck is what hides it. If
-// the duck regresses the plugin clicks whenever anyone touches HQ.
-void hqSwitchDoesNotClick()
+// the duck regresses the plugin clicks whenever anyone touches QUALITY. YUCK is
+// the furthest jump from HQ, so it is the one worth checking.
+void qualitySwitchDoesNotClick()
 {
     constexpr int bs = 512;
     constexpr int switchBlock = 20;
@@ -258,7 +348,7 @@ void hqSwitchDoesNotClick()
     CHECK (p.setBusesLayout (stereoLayout()));
 
     p.prepareToPlay (48000.0, bs);
-    p.apvts.getParameter ("hq")->setValueNotifyingHost (1.0f);
+    setChoice (p, "quality", 0);
 
     juce::AudioBuffer<float> buffer { 4, bs };
     juce::MidiBuffer midi;
@@ -268,7 +358,7 @@ void hqSwitchDoesNotClick()
     for (int b = 0; b < 40; ++b)
     {
         if (b == switchBlock)
-            p.apvts.getParameter ("hq")->setValueNotifyingHost (0.0f);
+            setChoice (p, "quality", 2); // the furthest jump: 8x linear phase to none
 
         for (int i = 0; i < bs; ++i, ++n)
         {
@@ -396,6 +486,69 @@ void outputTrimsTheBlend()
     CHECK (std::abs (buffer.getSample (0, latency) - expected) < 1.0e-6f);
 }
 
+// FLOOR can be pushed right up under CEILING, and once the clamp bites the
+// parameter keeps climbing while the audio does not -- so the readout has to say
+// which value is actually in force. It is the parameter's own text function, so
+// the host sees the same string the pill does.
+void floorReadsAsCappedByCeiling()
+{
+    HardCapProcessor p;
+
+    auto& ceiling = *p.apvts.getParameter (ids::ceiling);
+    auto& floor = *p.apvts.getParameter (ids::floorDb);
+
+    const auto setDb = [] (juce::RangedAudioParameter& param, float db)
+    {
+        param.setValueNotifyingHost (param.convertTo0to1 (db));
+    };
+
+    setDb (ceiling, -6.0f);
+
+    // Below the cap: the floor reads as itself.
+    setDb (floor, -12.0f);
+    CHECK (floor.getCurrentValueAsText() == "-12.0 dB");
+
+    // Above it: bracketed, and reading the value the engine is really using --
+    // one 0.1 dB step under the ceiling, which is as close as the two can get.
+    setDb (floor, -3.0f);
+    CHECK (floor.getCurrentValueAsText() == "- -6.1 dB -");
+
+    // And it follows the ceiling rather than being decided once.
+    setDb (ceiling, -24.0f);
+    CHECK (floor.getCurrentValueAsText() == "- -24.1 dB -");
+
+    setDb (ceiling, -1.0f);
+    CHECK (floor.getCurrentValueAsText() == "-3.0 dB");
+
+    setDb (floor, floorOffDb);
+    CHECK (floor.getCurrentValueAsText() == "INSTANT");
+
+    // The clamp the readout is describing: a window one step wide, not a dead one.
+    const auto ceilingLin = juce::Decibels::decibelsToGain (-6.0f);
+    const auto clamped = hardcap::Engine::clampFloor (1.0f, ceilingLin);
+    CHECK (std::abs (juce::Decibels::gainToDecibels (clamped / ceilingLin)
+                     - hardcap::Engine::floorHeadroomDb) < 0.01f);
+}
+
+// The pills list a parameter's own choices on right-click, and guard on
+// getNumSteps so that a continuous parameter -- which would answer with hundreds
+// of steps and build a string for every one of them -- is never asked. That
+// guard is only as good as the split below.
+void onlyChoiceParametersAreListable()
+{
+    HardCapProcessor p;
+
+    const auto steps = [&p] (const char* id) { return p.apvts.getParameter (id)->getNumSteps(); };
+
+    for (auto* id : { ids::scLink, ids::quality, ids::filterPos, ids::scSource,
+                      ids::slope, ids::clip })
+        CHECK (steps (id) >= 2 && steps (id) <= 32);
+
+    for (auto* id : { ids::floorDb, ids::ceiling, ids::filterHz, ids::pre,
+                      ids::output, ids::mix, ids::shape })
+        CHECK (steps (id) > 32);
+}
+
 } // namespace
 
 int main()
@@ -409,10 +562,13 @@ int main()
     runLayout (juce::AudioChannelSet::mono(), juce::AudioChannelSet::stereo(), 48000.0, 128);
 
     shortcutsAreExact();
-    hqLatencyIsConstant();
-    hqSwitchDoesNotClick();
+    wtfPansTheCarrier();
+    qualityLatencyIsConstant();
+    qualitySwitchDoesNotClick();
     dryPathIsAligned();
     outputTrimsTheBlend();
+    floorReadsAsCappedByCeiling();
+    onlyChoiceParametersAreListable();
     statePersists();
     rejectsSillyLayouts();
 
