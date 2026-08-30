@@ -206,25 +206,26 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
 
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-
+      # gh rather than actions/download-artifact: the repo's action policy is
+      # set to local-only, which refuses any action not owned by this account.
+      # gh is preinstalled on the runner and needs no policy exemption. It
+      # unpacks one directory per artifact rather than a flat dist/.
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          ls -l dist
+          gh run download "$GITHUB_RUN_ID" --dir dist
+          ls -lR dist
 
           # All three platforms or nothing: a release missing a platform is
           # worse than a release that failed loudly.
           for name in Linux Windows macOS; do
-            test -f "dist/SideCrush-$name.zip" || {
-              echo "missing dist/SideCrush-$name.zip"
+            test -f "dist/SideCrush-$name/SideCrush-$name.zip" || {
+              echo "missing dist/SideCrush-$name/SideCrush-$name.zip"
               exit 1
             }
           done
@@ -233,9 +234,9 @@ jobs:
           # creates the tag, which fires this workflow against it. Replace the
           # assets instead of failing, so re-running this job is safe.
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/*/*.zip --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            gh release create "$GITHUB_REF_NAME" dist/*/*.zip \
               --draft \
               --title "$GITHUB_REF_NAME" \
               --generate-notes
