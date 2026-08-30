@@ -36,7 +36,7 @@ bool allFinite (const juce::AudioBuffer<float>& b, int numChannels, int numSampl
 void runLayout (const juce::AudioChannelSet& main, const juce::AudioChannelSet& sidechain,
                 double sampleRate, int blockSize)
 {
-    HardCapProcessor p;
+    SideCrushProcessor p;
 
     juce::AudioProcessor::BusesLayout layout;
     layout.inputBuses.add (main);
@@ -100,7 +100,7 @@ void shortcutsAreExact()
 
     const auto render = [] (bool internalSource, bool monoLink, bool preSummed)
     {
-        HardCapProcessor p;
+        SideCrushProcessor p;
         CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, blockSize);
@@ -178,7 +178,7 @@ void wtfPansTheCarrier()
 
     const auto widestChannelGap = [] (int link)
     {
-        HardCapProcessor p;
+        SideCrushProcessor p;
         CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, bs);
@@ -251,7 +251,7 @@ void wtfFullIntensitySumsToMono()
 
     const auto run = [] (int link, float intensity)
     {
-        HardCapProcessor p;
+        SideCrushProcessor p;
         CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, bs);
@@ -329,7 +329,7 @@ void qualityLatencyIsConstant()
 
     const auto peakOffset = [] (int quality)
     {
-        HardCapProcessor p;
+        SideCrushProcessor p;
         CHECK (p.setBusesLayout (stereoLayout()));
 
         p.prepareToPlay (48000.0, blockSize);
@@ -416,7 +416,7 @@ void qualitySwitchDoesNotClick()
     constexpr int bs = 512;
     constexpr int switchBlock = 20;
 
-    HardCapProcessor p;
+    SideCrushProcessor p;
     CHECK (p.setBusesLayout (stereoLayout()));
 
     p.prepareToPlay (48000.0, bs);
@@ -468,7 +468,7 @@ void qualitySwitchDoesNotClick()
 
 void statePersists()
 {
-    HardCapProcessor a, b;
+    SideCrushProcessor a, b;
 
     a.apvts.getParameter ("ceiling")->setValueNotifyingHost (0.25f);
     a.apvts.getParameter ("clip")->setValueNotifyingHost (0.0f);
@@ -485,7 +485,7 @@ void statePersists()
 
 void rejectsSillyLayouts()
 {
-    HardCapProcessor p;
+    SideCrushProcessor p;
 
     juce::AudioProcessor::BusesLayout monoInStereoOut;
     monoInStereoOut.inputBuses.add (juce::AudioChannelSet::mono());
@@ -501,7 +501,7 @@ void dryPathIsAligned()
 {
     constexpr int blockSize = 512;
 
-    HardCapProcessor p;
+    SideCrushProcessor p;
     CHECK (p.setBusesLayout (stereoLayout()));
     p.prepareToPlay (48000.0, blockSize);
 
@@ -536,7 +536,7 @@ void outputTrimsTheBlend()
 {
     constexpr int blockSize = 512;
 
-    HardCapProcessor p;
+    SideCrushProcessor p;
     CHECK (p.setBusesLayout (stereoLayout()));
     p.prepareToPlay (48000.0, blockSize);
 
@@ -564,7 +564,7 @@ void outputTrimsTheBlend()
 // the host sees the same string the pill does.
 void floorReadsAsCappedByCeiling()
 {
-    HardCapProcessor p;
+    SideCrushProcessor p;
 
     auto& ceiling = *p.apvts.getParameter (ids::ceiling);
     auto& floor = *p.apvts.getParameter (ids::floorDb);
@@ -597,9 +597,9 @@ void floorReadsAsCappedByCeiling()
 
     // The clamp the readout is describing: a window one step wide, not a dead one.
     const auto ceilingLin = juce::Decibels::decibelsToGain (-6.0f);
-    const auto clamped = hardcap::Engine::clampFloor (1.0f, ceilingLin);
+    const auto clamped = sidecrush::Engine::clampFloor (1.0f, ceilingLin);
     CHECK (std::abs (juce::Decibels::gainToDecibels (clamped / ceilingLin)
-                     - hardcap::Engine::floorHeadroomDb) < 0.01f);
+                     - sidecrush::Engine::floorHeadroomDb) < 0.01f);
 }
 
 } // namespace
@@ -625,6 +625,6 @@ int main()
     statePersists();
     rejectsSillyLayouts();
 
-    std::puts ("hardcap host: all checks passed");
+    std::puts ("sidecrush host: all checks passed");
     return 0;
 }

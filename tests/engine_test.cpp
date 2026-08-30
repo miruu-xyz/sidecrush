@@ -1,15 +1,15 @@
-// Self-check for the HardCap DSP core. No framework, no fixtures -- just the
+// Self-check for the SideCrush DSP core. No framework, no fixtures -- just the
 // smallest set of assertions that fail if the algorithm in SPEC.md section 1
 // stops being true. Build and run it: it prints nothing and exits 0 on success.
 
-#include "HardCapEngine.h"
+#include "SideCrushEngine.h"
 #include "check.h"
 
 #include <cmath>
 #include <cstdio>
 #include <numbers>
 
-using namespace hardcap;
+using namespace sidecrush;
 
 namespace
 {
@@ -495,6 +495,6 @@ int main()
     wtfIntensityEndpoints();
     wtfWidthLeavesMonoAndDryAlone();
 
-    std::puts ("hardcap engine: all checks passed");
+    std::puts ("sidecrush engine: all checks passed");
     return 0;
 }

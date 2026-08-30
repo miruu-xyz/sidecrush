@@ -5,7 +5,7 @@
 // 48 kHz is 24 kHz, so above ~20 kHz the filter is doing nothing anyway.
 
 //==============================================================================
-juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createParameterLayout (
+juce::AudioProcessorValueTreeState::ParameterLayout SideCrushProcessor::createParameterLayout (
     std::atomic<bool>* filterIsPostFlag)
 {
     using namespace juce;
@@ -72,7 +72,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
                 // underneath. Say so rather than reading back a value the audio is
                 // not using -- and say it here, in the parameter's own text, so
                 // the host's automation lane shows it too.
-                if (const auto cap = ceiling->get() + hardcap::Engine::floorHeadroomDb;
+                if (const auto cap = ceiling->get() + sidecrush::Engine::floorHeadroomDb;
                     v > cap)
                     return "- " + String (jmax (floorOffDb, cap), 1) + " dB -";
 
@@ -168,7 +168,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 }
 
 //==============================================================================
-HardCapProcessor::HardCapProcessor()
+SideCrushProcessor::SideCrushProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
@@ -184,7 +184,7 @@ HardCapProcessor::HardCapProcessor()
             get (ids::scSource),  get (ids::quality) };
 }
 
-bool HardCapProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool SideCrushProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto mainIn = layouts.getMainInputChannelSet();
     const auto mainOut = layouts.getMainOutputChannelSet();
@@ -203,7 +203,7 @@ bool HardCapProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
         || sc == juce::AudioChannelSet::stereo();
 }
 
-void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
+void SideCrushProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     const auto numCh = juce::jmax (1, getMainBusNumInputChannels());
     baseSampleRate = sampleRate;
@@ -268,9 +268,9 @@ void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     pullParameters();
 }
 
-void HardCapProcessor::pullParameters()
+void SideCrushProcessor::pullParameters()
 {
-    hardcap::Params p;
+    sidecrush::Params p;
     p.preGain = juce::Decibels::decibelsToGain (raw.pre->load());
     p.ceilingLin = juce::Decibels::decibelsToGain (raw.ceiling->load());
 
@@ -296,7 +296,7 @@ void HardCapProcessor::pullParameters()
     filterIsPost.store (p.filterPost, std::memory_order_relaxed);
 }
 
-void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -543,18 +543,18 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 }
 
 //==============================================================================
-juce::AudioProcessorEditor* HardCapProcessor::createEditor()
+juce::AudioProcessorEditor* SideCrushProcessor::createEditor()
 {
-    return new HardCapEditor (*this);
+    return new SideCrushEditor (*this);
 }
 
-void HardCapProcessor::getStateInformation (juce::MemoryBlock& destData)
+void SideCrushProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto state = apvts.copyState(); auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
-void HardCapProcessor::setStateInformation (const void* data, int sizeInBytes)
+void SideCrushProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         apvts.replaceState (juce::ValueTree::fromXml (*xml));
@@ -563,5 +563,5 @@ void HardCapProcessor::setStateInformation (const void* data, int sizeInBytes)
 //==============================================================================
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new HardCapProcessor();
+    return new SideCrushProcessor();
 }

@@ -3,7 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include "HardCapEngine.h"
+#include "SideCrushEngine.h"
 
 //==============================================================================
 // Shared with the editor: a parameter id is a pairing between two files, and a
@@ -99,11 +99,11 @@ private:
 };
 
 //==============================================================================
-class HardCapProcessor final : public juce::AudioProcessor
+class SideCrushProcessor final : public juce::AudioProcessor
 {
 public:
-    HardCapProcessor();
-    ~HardCapProcessor() override = default;
+    SideCrushProcessor();
+    ~SideCrushProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
     void releaseResources() override {}
@@ -113,7 +113,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "HardCap"; }
+    const juce::String getName() const override { return "SideCrush"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -137,7 +137,7 @@ public:
     // holding this pointer are gone before it is.
     std::atomic<bool> filterIsPost { false };
 
-    juce::AudioProcessorValueTreeState apvts { *this, nullptr, "HARDCAP",
+    juce::AudioProcessorValueTreeState apvts { *this, nullptr, "SIDECRUSH",
                                                createParameterLayout (&filterIsPost) };
     ScopeFifo scope;
 
@@ -184,7 +184,7 @@ private:
 
     Raw raw {};
 
-    hardcap::Engine engine;
+    sidecrush::Engine engine;
     juce::AudioBuffer<float> detector;
 
     // MIX. The dry side goes in before the oversampler writes over the main
@@ -225,5 +225,5 @@ private:
     // together, which is the very click the duck exists to hide.
     int switchHold = 0;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardCapProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SideCrushProcessor)
 };

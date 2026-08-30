@@ -35,7 +35,35 @@ namespace
 }
 
 //==============================================================================
-juce::Font hcFont (float pointHeight)
+ScalePreference::ScalePreference()
+{
+    juce::PropertiesFile::Options options;
+    options.applicationName     = "SideCrush";
+    options.filenameSuffix      = "settings";
+    options.folderName          = "miruu";
+    options.osxLibrarySubFolder = "Application Support";
+
+    file = std::make_unique<juce::PropertiesFile> (options);
+}
+
+float ScalePreference::get() const
+{
+    // Clamped to the offered steps: the file is user-editable, and a scale of 40
+    // would leave the editor unreadable with no way back to the switch.
+    return juce::jlimit (scaleSteps[0], scaleSteps[std::size (scaleSteps) - 1],
+                         (float) file->getDoubleValue ("uiScale", 1.0));
+}
+
+void ScalePreference::set (float scale)
+{
+    // setValue is a no-op when the value has not changed, so this is safe to
+    // call on every setScale, including the one that applies the stored value.
+    file->setValue ("uiScale", (double) scale);
+    file->saveIfNeeded();
+}
+
+//==============================================================================
+juce::Font uiFont (float pointHeight)
 {
     // ponytail: a function-local static Typeface, released during static
     // destruction. Move it into the LookAndFeel if the leak detector ever
@@ -72,33 +100,33 @@ void paintWell (juce::Graphics& g, juce::Rectangle<float> r, float corner,
 
 void paintWordmark (juce::Graphics& g, juce::Rectangle<float> panel, juce::Colour dim)
 {
-    const auto font = hcFont (12.0f);
+    const auto font = uiFont (12.0f);
     // Figma puts the wordmark's baseline 10px above the panel's bottom edge.
     const auto area = panel.reduced (10.0f).translated (0.0f, 3.0f);
 
     g.setFont (font);
-    g.setColour (hccolour::brand);
-    g.drawText ("HARDCAP", area, juce::Justification::bottomLeft);
+    g.setColour (uicolour::brand);
+    g.drawText ("SIDECRUSH", area, juce::Justification::bottomLeft);
 
     g.setColour (dim);
     g.drawText ("by miruu",
-                area.withTrimmedLeft (juce::GlyphArrangement::getStringWidth (font, "HARDCAP ")),
+                area.withTrimmedLeft (juce::GlyphArrangement::getStringWidth (font, "SIDECRUSH ")),
                 juce::Justification::bottomLeft);
 }
 
 //==============================================================================
-HardCapLookAndFeel::HardCapLookAndFeel()
+SideCrushLookAndFeel::SideCrushLookAndFeel()
 {
-    setColour (juce::Slider::textBoxTextColourId, hccolour::value);
+    setColour (juce::Slider::textBoxTextColourId, uicolour::value);
     setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    setColour (juce::Slider::textBoxHighlightColourId, hccolour::accent.withAlpha (0.3f));
-    setColour (juce::Slider::rotarySliderFillColourId, hccolour::accent);
-    setColour (juce::CaretComponent::caretColourId, hccolour::accent);
-    setColour (juce::PopupMenu::backgroundColourId, hccolour::wellCentre);
-    setColour (juce::PopupMenu::textColourId, hccolour::value);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, hccolour::accent.withAlpha (0.18f));
-    setColour (juce::PopupMenu::highlightedTextColourId, hccolour::value);
+    setColour (juce::Slider::textBoxHighlightColourId, uicolour::accent.withAlpha (0.3f));
+    setColour (juce::Slider::rotarySliderFillColourId, uicolour::accent);
+    setColour (juce::CaretComponent::caretColourId, uicolour::accent);
+    setColour (juce::PopupMenu::backgroundColourId, uicolour::wellCentre);
+    setColour (juce::PopupMenu::textColourId, uicolour::value);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, uicolour::accent.withAlpha (0.18f));
+    setColour (juce::PopupMenu::highlightedTextColourId, uicolour::value);
 }
 
 // Every control's bounds are given in design coordinates, so the split between
@@ -106,7 +134,7 @@ HardCapLookAndFeel::HardCapLookAndFeel()
 // from the text box's requested size: a dial takes a square off the top, a
 // fader takes everything but the bottom 32px, and whatever is left is the
 // readout. That lands both readouts on the design's baseline.
-juce::Slider::SliderLayout HardCapLookAndFeel::getSliderLayout (juce::Slider& slider)
+juce::Slider::SliderLayout SideCrushLookAndFeel::getSliderLayout (juce::Slider& slider)
 {
     const auto bounds = slider.getLocalBounds();
     juce::Slider::SliderLayout layout;
@@ -129,7 +157,7 @@ juce::Slider::SliderLayout HardCapLookAndFeel::getSliderLayout (juce::Slider& sl
     return layout;
 }
 
-void HardCapLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
+void SideCrushLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
                                            float pos, float startAngle, float endAngle,
                                            juce::Slider& slider)
 {
@@ -144,8 +172,8 @@ void HardCapLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
     // the small ones are not scaled-down copies of the big one.
     juce::DropShadow { juce::Colours::black.withAlpha (0.25f), 10, { 3, 4 } }.drawForPath (g, body);
 
-    g.setGradientFill ({ hccolour::knobTop,    centre.x - radius * 0.16f, centre.y - radius,
-                         hccolour::knobBottom, centre.x + radius * 0.16f, centre.y + radius, false });
+    g.setGradientFill ({ uicolour::knobTop,    centre.x - radius * 0.16f, centre.y - radius,
+                         uicolour::knobBottom, centre.x + radius * 0.16f, centre.y + radius, false });
     g.fillPath (body);
 
     // The pointer runs from 0.386R to the rim on all three dials, and is 3px
@@ -164,28 +192,28 @@ void HardCapLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
 
     // A lit pointer bleeds cyan into the knob face; an idle one is flat. Figma
     // draws that as a heavily blurred ellipse lying along the pointer.
-    if (colour == hccolour::accent)
+    if (colour == uicolour::accent)
         juce::DropShadow { colour.withAlpha (0.55f), 14, {} }.drawForPath (g, pointer);
 
     g.setColour (colour);
     g.fillPath (pointer);
 }
 
-void HardCapLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h,
+void SideCrushLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h,
                                            float pos, float, float,
                                            juce::Slider::SliderStyle, juce::Slider&)
 {
     const auto area = juce::Rectangle<int> (x, y, w, h).toFloat();
 
-    g.setColour (hccolour::track);
+    g.setColour (uicolour::track);
     g.fillRect (area.getCentreX() - 1.0f, area.getY(), 2.0f, area.getHeight());
 
     // The cap overhangs the ends of the track by half its height, exactly as it
     // does in the design at either extreme of travel.
     const juce::Rectangle<float> cap { area.getX(), pos - 5.5f, area.getWidth(), 11.0f };
 
-    g.setGradientFill ({ hccolour::thumbTop,    cap.getTopLeft(),
-                         hccolour::thumbBottom, cap.getBottomRight(), false });
+    g.setGradientFill ({ uicolour::thumbTop,    cap.getTopLeft(),
+                         uicolour::thumbBottom, cap.getBottomRight(), false });
     g.fillRoundedRectangle (cap, 3.0f);
 
     g.setColour (juce::Colours::black.withAlpha (0.2f));
@@ -194,25 +222,25 @@ void HardCapLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
         g.fillRect (cap.getX() + 7.0f, cap.getY() + row - 0.5f, cap.getWidth() - 14.0f, 1.0f);
 }
 
-juce::Label* HardCapLookAndFeel::createSliderTextBox (juce::Slider& slider)
+juce::Label* SideCrushLookAndFeel::createSliderTextBox (juce::Slider& slider)
 {
     auto* label = LookAndFeel_V4::createSliderTextBox (slider);
-    label->setFont (hcFont (12.0f));
+    label->setFont (uiFont (12.0f));
     label->setJustificationType (juce::Justification::centredBottom);
     label->setBorderSize ({ 0, 0, 3, 0 });
     return label;
 }
 
-void HardCapLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
+void SideCrushLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
 {
     const juce::Rectangle<float> r { 0.0f, 0.0f, (float) w, (float) h };
-    paintWell (g, r, 4.0f, hccolour::wellCentre, hccolour::background);
-    g.setColour (hccolour::hairline);
+    paintWell (g, r, 4.0f, uicolour::wellCentre, uicolour::background);
+    g.setColour (uicolour::hairline);
     g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
 }
 
 //==============================================================================
-Pill::Pill (HardCapProcessor& p, const char* paramId, Gesture g, juce::String dimPrefix)
+Pill::Pill (SideCrushProcessor& p, const char* paramId, Gesture g, juce::String dimPrefix)
     : param (p.apvts.getParameter (paramId)), gesture (g), prefix (std::move (dimPrefix))
 {
     setComponentID (paramId);
@@ -238,23 +266,23 @@ void Pill::paint (juce::Graphics& g)
         shape.addRoundedRectangle (r, 4.0f);
         juce::DropShadow { onTint.withAlpha (0.30f), 24, {} }.drawForPath (g, shape);
 
-        paintWell (g, r, 4.0f, juce::Colour { 0xff740000 }.withAlpha (0.55f), hccolour::background);
+        paintWell (g, r, 4.0f, juce::Colour { 0xff740000 }.withAlpha (0.55f), uicolour::background);
     }
     else
     {
-        paintWell (g, r, 4.0f, hccolour::wellCentre, hccolour::background);
+        paintWell (g, r, 4.0f, uicolour::wellCentre, uicolour::background);
     }
 
     if (hovered)
     {
         juce::Path shape;
         shape.addRoundedRectangle (r, 4.0f);
-        juce::DropShadow { hccolour::accent.withAlpha (0.10f), 26, {} }.drawForPath (g, shape);
+        juce::DropShadow { uicolour::accent.withAlpha (0.10f), 26, {} }.drawForPath (g, shape);
     }
 
-    const auto border = engaged  ? hccolour::clipBorder
-                      : hovered  ? hccolour::accent
-                      : outlined ? hccolour::hairline
+    const auto border = engaged  ? uicolour::clipBorder
+                      : hovered  ? uicolour::accent
+                      : outlined ? uicolour::hairline
                                  : juce::Colours::transparentBlack;
 
     if (! border.isTransparent())
@@ -266,12 +294,12 @@ void Pill::paint (juce::Graphics& g)
     drawLabel (g, overrideText != nullptr ? overrideText()
                                           : param != nullptr ? param->getCurrentValueAsText()
                                                              : juce::String(),
-               textColour != nullptr ? textColour() : hccolour::value);
+               textColour != nullptr ? textColour() : uicolour::value);
 }
 
 void Pill::drawLabel (juce::Graphics& g, juce::String text, juce::Colour bright)
 {
-    const auto font = hcFont (12.0f);
+    const auto font = uiFont (12.0f);
     g.setFont (font);
 
     if (prefix.isEmpty())
@@ -288,7 +316,7 @@ void Pill::drawLabel (juce::Graphics& g, juce::String text, juce::Colour bright)
     const auto total = prefixWidth + gap + juce::GlyphArrangement::getStringWidth (font, text);
     const auto left = ((float) getWidth() - total) * 0.5f;
 
-    g.setColour (hccolour::label);
+    g.setColour (uicolour::label);
     g.drawText (prefix, juce::Rectangle<float> { left, 0.0f, prefixWidth, (float) getHeight() },
                 juce::Justification::centredLeft);
 
@@ -406,20 +434,20 @@ DialCaption::DialCaption (juce::String captionText) : caption (std::move (captio
 
 void DialCaption::paint (juce::Graphics& g)
 {
-    g.setFont (hcFont (12.0f));
+    g.setFont (uiFont (12.0f));
 
     // Dragging wins over hovering: if the dial is moving, its number is the only
     // thing worth saying.
     if (valueText.isNotEmpty())
     {
-        g.setColour (hccolour::value);
+        g.setColour (uicolour::value);
         g.drawText (valueText, getLocalBounds(), juce::Justification::centred);
         return;
     }
 
     const auto showHover = hovered && hoverText != nullptr;
 
-    g.setColour (showHover ? hccolour::accent : hccolour::label);
+    g.setColour (showHover ? uicolour::accent : uicolour::label);
     g.drawText (showHover ? hoverText() : caption, getLocalBounds(), juce::Justification::centred);
 }
 
@@ -448,7 +476,7 @@ void DialCaption::mouseUp (const juce::MouseEvent& e)
 IconButton::IconButton (const void* svgData, int svgSize)
 {
     // The exported glyphs carry the design's pre-blend #b1b1b1; inside the scope
-    // that dodges to hccolour::hairline, and brightens under the pointer.
+    // that dodges to uicolour::hairline, and brightens under the pointer.
     const auto recolour = [svgData, svgSize] (juce::Colour to)
     {
         auto d = juce::Drawable::createFromImageData (svgData, (size_t) svgSize);
@@ -459,8 +487,8 @@ IconButton::IconButton (const void* svgData, int svgSize)
         return d;
     };
 
-    resting = recolour (hccolour::hairline.brighter (0.6f));
-    lit = recolour (hccolour::value);
+    resting = recolour (uicolour::hairline.brighter (0.6f));
+    lit = recolour (uicolour::value);
 }
 
 void IconButton::paint (juce::Graphics& g)
@@ -481,7 +509,7 @@ void IconButton::mouseUp (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-ActivityLed::ActivityLed (HardCapProcessor& p) : processor (p) {}
+ActivityLed::ActivityLed (SideCrushProcessor& p) : processor (p) {}
 
 void ActivityLed::refresh()
 {
@@ -504,15 +532,15 @@ void ActivityLed::paint (juce::Graphics& g)
     dot.addEllipse (centre.x - 2.0f, centre.y - 2.0f, 4.0f, 4.0f);
 
     // Two stacked glows in the design: a tight bright one and a wide faint one.
-    juce::DropShadow { hccolour::accent.withAlpha (0.15f + 0.85f * lit), 12, {} }.drawForPath (g, dot);
-    juce::DropShadow { hccolour::accent.withAlpha (0.10f + 0.60f * lit), 5, {} }.drawForPath (g, dot);
+    juce::DropShadow { uicolour::accent.withAlpha (0.15f + 0.85f * lit), 12, {} }.drawForPath (g, dot);
+    juce::DropShadow { uicolour::accent.withAlpha (0.10f + 0.60f * lit), 5, {} }.drawForPath (g, dot);
 
-    g.setColour (hccolour::accent.withAlpha (0.35f + 0.65f * lit));
+    g.setColour (uicolour::accent.withAlpha (0.35f + 0.65f * lit));
     g.fillPath (dot);
 }
 
 //==============================================================================
-ScopeComponent::ScopeComponent (HardCapProcessor& p) : processor (p)
+ScopeComponent::ScopeComponent (SideCrushProcessor& p) : processor (p)
 {
     setComponentID ("scope");
     setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
@@ -579,7 +607,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 {
     const auto bounds = getLocalBounds().toFloat();
 
-    paintWell (g, bounds, 12.0f, hccolour::scopeCentre, hccolour::scopeEdge);
+    paintWell (g, bounds, 12.0f, uicolour::scopeCentre, uicolour::scopeEdge);
 
     juce::Path frame;
     frame.addRoundedRectangle (bounds, 12.0f);
@@ -645,7 +673,7 @@ void ScopeComponent::paint (juce::Graphics& g)
             i == 0 ? curve.startNewSubPath (point) : curve.lineTo (point);
         }
 
-        g.setColour (hccolour::accent);
+        g.setColour (uicolour::accent);
         g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded));
 
@@ -662,7 +690,7 @@ void ScopeComponent::paint (juce::Graphics& g)
     const auto ceilingLin = juce::Decibels::decibelsToGain (
         processor.apvts.getRawParameterValue (ids::ceiling)->load());
     const auto requestedFloorDb = processor.apvts.getRawParameterValue (ids::floorDb)->load();
-    const auto floorLin = hardcap::Engine::clampFloor (
+    const auto floorLin = sidecrush::Engine::clampFloor (
         requestedFloorDb <= floorOffDb ? 0.0f : juce::Decibels::decibelsToGain (requestedFloorDb),
         ceilingLin);
 
@@ -694,12 +722,12 @@ void ScopeComponent::paint (juce::Graphics& g)
 
     // Solid where the sidechain is above the ceiling, gone where it is below the
     // floor: the trace is drawn only where it is actually doing something.
-    juce::ColourGradient window { hccolour::accent, centreX, toY (1.0f),
-                                  hccolour::accent, centreX, toY (-1.0f), false };
-    window.addColour (atAmplitude (ceilingLin), hccolour::accent);
-    window.addColour (atAmplitude (floorEdge), hccolour::accent.withAlpha (0.0f));
-    window.addColour (atAmplitude (-floorEdge), hccolour::accent.withAlpha (0.0f));
-    window.addColour (atAmplitude (-ceilingLin), hccolour::accent);
+    juce::ColourGradient window { uicolour::accent, centreX, toY (1.0f),
+                                  uicolour::accent, centreX, toY (-1.0f), false };
+    window.addColour (atAmplitude (ceilingLin), uicolour::accent);
+    window.addColour (atAmplitude (floorEdge), uicolour::accent.withAlpha (0.0f));
+    window.addColour (atAmplitude (-floorEdge), uicolour::accent.withAlpha (0.0f));
+    window.addColour (atAmplitude (-ceilingLin), uicolour::accent);
 
     // ---- traces -------------------------------------------------------------
     const auto& fifo = processor.scope;
@@ -864,7 +892,7 @@ void ScopeComponent::paint (juce::Graphics& g)
             const auto strokeOutput = [&] (float alpha)
             {
                 const auto line = stroke (1.4f);
-                const auto lit = [alpha] (float a) { return hccolour::output.withAlpha (alpha * a); };
+                const auto lit = [alpha] (float a) { return uicolour::output.withAlpha (alpha * a); };
 
                 if (! wtf)
                 {
@@ -929,12 +957,12 @@ void ScopeComponent::paint (juce::Graphics& g)
 
                 // ... and its outline greys out where it is inside the floor
                 // band, where the lid is wide open and the level means nothing.
-                juce::ColourGradient outline { hccolour::accent, centreX, toY (1.0f),
-                                               hccolour::accent, centreX, toY (-1.0f), false };
-                outline.addColour (atAmplitude (floorEdge) - 0.006, hccolour::accent);
-                outline.addColour (atAmplitude (floorEdge), hccolour::belowFloor);
-                outline.addColour (atAmplitude (-floorEdge), hccolour::belowFloor);
-                outline.addColour (atAmplitude (-floorEdge) + 0.006, hccolour::accent);
+                juce::ColourGradient outline { uicolour::accent, centreX, toY (1.0f),
+                                               uicolour::accent, centreX, toY (-1.0f), false };
+                outline.addColour (atAmplitude (floorEdge) - 0.006, uicolour::accent);
+                outline.addColour (atAmplitude (floorEdge), uicolour::belowFloor);
+                outline.addColour (atAmplitude (-floorEdge), uicolour::belowFloor);
+                outline.addColour (atAmplitude (-floorEdge) + 0.006, uicolour::accent);
 
                 g.setGradientFill (outline);
                 g.strokePath (sidechain, stroke (1.6f));
@@ -976,14 +1004,14 @@ void ScopeComponent::paint (juce::Graphics& g)
             const juce::Rectangle<float> band { bounds.getX(), juce::jmin (edge, threshold),
                                                 bounds.getWidth(), std::abs (threshold - edge) };
 
-            g.setGradientFill ({ hccolour::accent.withAlpha (0.07f), centreX, edge,
-                                 hccolour::accent.withAlpha (0.14f), centreX, threshold, false });
+            g.setGradientFill ({ uicolour::accent.withAlpha (0.07f), centreX, edge,
+                                 uicolour::accent.withAlpha (0.14f), centreX, threshold, false });
             g.fillRect (band);
         }
 
         if (floorLin > 0.0f)
         {
-            g.setColour (hccolour::clipOn.withAlpha (0.2f));
+            g.setColour (uicolour::clipOn.withAlpha (0.2f));
             g.fillRect (bounds.getX(), toY (floorLin), bounds.getWidth(),
                         toY (-floorLin) - toY (floorLin));
         }
@@ -994,7 +1022,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-SettingsPanel::SettingsPanel (HardCapProcessor& p)
+SettingsPanel::SettingsPanel (SideCrushProcessor& p)
     : scale ("SCALE"),
       link (p, ids::scLink, Pill::Gesture::cycle),
       quality (p, ids::quality, Pill::Gesture::cycle),
@@ -1021,9 +1049,9 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
     {
         switch ((int) p.apvts.getRawParameterValue (ids::quality)->load())
         {
-            case 1:  return hccolour::label;
-            case 2:  return hccolour::yuck;
-            default: return hccolour::value;
+            case 1:  return uicolour::label;
+            case 2:  return uicolour::yuck;
+            default: return uicolour::value;
         }
     };
 
@@ -1063,7 +1091,7 @@ void SettingsPanel::paint (juce::Graphics& g)
 
     // Figma lifts the whole panel to a lighter slate while it is open.
     paintWell (g, bounds, 12.0f, juce::Colour { 0xff151c22 }, juce::Colour { 0xff2a3844 });
-    paintWordmark (g, bounds, hccolour::brandDim.brighter (0.4f));
+    paintWordmark (g, bounds, uicolour::brandDim.brighter (0.4f));
 }
 
 void SettingsPanel::resized()
@@ -1092,7 +1120,7 @@ void SettingsPanel::resized()
 }
 
 //==============================================================================
-HardCapEditor::HardCapEditor (HardCapProcessor& p)
+SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
       slopePill (p, ids::slope,   Pill::Gesture::drag),
       floorPill (p, ids::floorDb, Pill::Gesture::drag),
@@ -1107,9 +1135,9 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
     addSlider (preSlider,    juce::Slider::LinearVertical,     ids::pre,      {}, true, preAtt);
     addSlider (outputSlider, juce::Slider::LinearVertical,     ids::output,   {}, true, outputAtt);
     addSlider (mixSlider,    juce::Slider::LinearVertical,     ids::mix,      {}, true, mixAtt);
-    addSlider (ceilingKnob,  juce::Slider::RotaryVerticalDrag, ids::ceiling,  hccolour::accent, true, ceilingAtt);
-    addSlider (filterKnob,   juce::Slider::RotaryVerticalDrag, ids::filterHz, hccolour::accent, false, filterAtt);
-    addSlider (shapeKnob,    juce::Slider::RotaryVerticalDrag, ids::shape,    hccolour::accent, false, shapeAtt);
+    addSlider (ceilingKnob,  juce::Slider::RotaryVerticalDrag, ids::ceiling,  uicolour::accent, true, ceilingAtt);
+    addSlider (filterKnob,   juce::Slider::RotaryVerticalDrag, ids::filterHz, uicolour::accent, false, filterAtt);
+    addSlider (shapeKnob,    juce::Slider::RotaryVerticalDrag, ids::shape,    uicolour::accent, false, shapeAtt);
 
     // The design's dials sweep 270 degrees: 7:30 round to 4:30. JUCE measures
     // clockwise from 12 o'clock and requires both angles to be positive, so the
@@ -1141,15 +1169,15 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
     slopePill.onClick = [this] { showSlopeMenu(); };
 
     clipPill.outlined = true;
-    clipPill.onTint = hccolour::clipOn;
+    clipPill.onTint = uicolour::clipOn;
     clipPill.overrideText = [] { return juce::String ("CLIP"); };
 
     // Off, CLIP reads as a legend rather than a live value, so the design drops
     // its text to the caption tone.
     clipPill.textColour = [this]
     {
-        return proc.apvts.getRawParameterValue (ids::clip)->load() > 0.5f ? hccolour::clipOn
-                                                                          : hccolour::label;
+        return proc.apvts.getRawParameterValue (ids::clip)->load() > 0.5f ? uicolour::clipOn
+                                                                          : uicolour::label;
     };
 
     filterCaption.hoverText = [this]
@@ -1260,8 +1288,7 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 
     lastFilterPost = proc.filterIsPost.load (std::memory_order_relaxed);
 
-    const auto stored = (float) proc.apvts.state.getProperty ("uiScale", 1.0);
-    setScale (juce::jlimit (0.75f, 1.5f, stored));
+    setScale (scalePref->get());
 
     // One timer for both animated children. 30 is plenty for a scope and costs
     // half of 60; it runs for as long as the editor is open, whether or not the
@@ -1269,12 +1296,12 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
     startTimerHz (30);
 }
 
-HardCapEditor::~HardCapEditor()
+SideCrushEditor::~SideCrushEditor()
 {
     setLookAndFeel (nullptr);
 }
 
-void HardCapEditor::showSlopeMenu()
+void SideCrushEditor::showSlopeMenu()
 {
     auto& slope = *proc.apvts.getParameter (ids::slope);
     const auto choices = slope.getAllValueStrings();
@@ -1284,7 +1311,7 @@ void HardCapEditor::showSlopeMenu()
                   [this] (int index) { applySlope (index); });
 }
 
-void HardCapEditor::showScaleMenu()
+void SideCrushEditor::showScaleMenu()
 {
     juce::StringArray items;
     auto current = 0;
@@ -1305,7 +1332,7 @@ void HardCapEditor::showScaleMenu()
                   });
 }
 
-void HardCapEditor::applySlope (int index)
+void SideCrushEditor::applySlope (int index)
 {
     auto& slope = *proc.apvts.getParameter (ids::slope);
     slope.beginChangeGesture();
@@ -1323,7 +1350,7 @@ void HardCapEditor::applySlope (int index)
     filter.endChangeGesture();
 }
 
-void HardCapEditor::updateScopeOverlay()
+void SideCrushEditor::updateScopeOverlay()
 {
     scope.setOverlay (shapeDrag     ? ScopeComponent::Overlay::shape
                     : thresholdDrag ? ScopeComponent::Overlay::thresholds
@@ -1334,7 +1361,7 @@ void HardCapEditor::updateScopeOverlay()
     clipPill.setVisible (! settings.isVisible() && ! shapeDrag);
 }
 
-void HardCapEditor::addSlider (juce::Slider& slider, juce::Slider::SliderStyle style,
+void SideCrushEditor::addSlider (juce::Slider& slider, juce::Slider::SliderStyle style,
                                const char* paramId, juce::Colour pointer, bool withReadout,
                                std::unique_ptr<SliderAttachment>& attachment)
 {
@@ -1354,16 +1381,16 @@ void HardCapEditor::addSlider (juce::Slider& slider, juce::Slider::SliderStyle s
     attachment = std::make_unique<SliderAttachment> (proc.apvts, paramId, slider);
 }
 
-void HardCapEditor::setScale (float scale)
+void SideCrushEditor::setScale (float scale)
 {
     scaleFactor = scale;
-    proc.apvts.state.setProperty ("uiScale", scale, nullptr);
+    scalePref->set (scale);
 
     setTransform (juce::AffineTransform::scale (scale));
     setSize (designWidth, designHeight);
 }
 
-void HardCapEditor::showSettings (bool shouldShow)
+void SideCrushEditor::showSettings (bool shouldShow)
 {
     scope.setVisible (! shouldShow);
     settings.setVisible (shouldShow);
@@ -1372,7 +1399,7 @@ void HardCapEditor::showSettings (bool shouldShow)
     updateScopeOverlay();
 }
 
-void HardCapEditor::refreshFromParameters()
+void SideCrushEditor::refreshFromParameters()
 {
     for (auto* slider : { &preSlider, &outputSlider, &mixSlider, &ceilingKnob, &filterKnob, &shapeKnob })
         slider->updateText();
@@ -1382,8 +1409,17 @@ void HardCapEditor::refreshFromParameters()
     repaint();
 }
 
-void HardCapEditor::timerCallback()
+void SideCrushEditor::timerCallback()
 {
+    // Another instance's editor may have moved the shared scale. Polling the
+    // timer that is already running costs one compare a frame and needs no
+    // listener to register, unregister, or outlive.
+    if (const auto scale = scalePref->get(); ! juce::approximatelyEqual (scale, scaleFactor))
+    {
+        setScale (scale);
+        settings.scale.repaint();
+    }
+
     if (scope.isVisible())
         scope.refresh();
 
@@ -1413,7 +1449,7 @@ void HardCapEditor::timerCallback()
     // The dial's pointer goes flat when its filter is switched off -- the design
     // calls it out as the only dial that does this.
     const auto filterOff = proc.apvts.getRawParameterValue (ids::filterHz)->load() >= filterOffHz - 1.0f;
-    const auto wanted = filterOff ? hccolour::idle : hccolour::accent;
+    const auto wanted = filterOff ? uicolour::idle : uicolour::accent;
 
     if (filterKnob.findColour (juce::Slider::rotarySliderFillColourId) != wanted)
     {
@@ -1422,9 +1458,9 @@ void HardCapEditor::timerCallback()
     }
 }
 
-void HardCapEditor::paint (juce::Graphics& g)
+void SideCrushEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (hccolour::background);
+    g.fillAll (uicolour::background);
 
     // `inset 8px 10px 22.2px rgba(255,255,255,0.02)` -- a barely-there lift in
     // the top-left corner, but it is measurably there in the reference render.
@@ -1436,23 +1472,23 @@ void HardCapEditor::paint (juce::Graphics& g)
     // would cost far more than the whole rest of this paint, and the result is
     // a soft round falloff either way.
     const juce::Rectangle<float> scopeArea { 451.0f, 48.0f, 380.0f, 230.0f };
-    g.setGradientFill ({ hccolour::accent.withAlpha (0.055f), scopeArea.getCentre(),
+    g.setGradientFill ({ uicolour::accent.withAlpha (0.055f), scopeArea.getCentre(),
                          juce::Colours::transparentBlack,
                          scopeArea.getCentre().translated (0.0f, scopeArea.getHeight() * 1.6f), true });
     g.fillRect (scopeArea.expanded (110.0f));
 
-    g.setFont (hcFont (16.0f));
-    g.setColour (hccolour::label);
+    g.setFont (uiFont (16.0f));
+    g.setColour (uicolour::label);
     g.drawText ("PRE",     juce::Rectangle<int> {  48, 48, 42, 19 }, juce::Justification::centred);
     g.drawText ("CEILING", juce::Rectangle<int> { 164, 48, 77, 19 }, juce::Justification::centred);
     g.drawText ("MIX",     juce::Rectangle<int> { 878, 48, 42, 19 }, juce::Justification::centred);
     g.drawText ("OUT",     juce::Rectangle<int> { 966, 48, 42, 19 }, juce::Justification::centred);
 }
 
-void HardCapEditor::resized()
+void SideCrushEditor::resized()
 {
     // Every number here is read straight off Figma node 1:11 at 1:1. Dials are
-    // given HardCapLookAndFeel::knobMargin of padding on every side so their
+    // given SideCrushLookAndFeel::knobMargin of padding on every side so their
     // drop shadow and the pointer's glow are not clipped by their own bounds.
     preSlider.setBounds    (  48,  83,  42, 192); // track 83..243, readout to 275
     mixSlider.setBounds    ( 878,  83,  42, 192);

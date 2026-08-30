@@ -1,7 +1,7 @@
 // Renders the editor to a PNG without a host and without opening any audio
 // device. See the target comment in CMakeLists.txt for why this exists.
 //
-//   hardcap_shot out.png [<param>=<value>] [hover=<id>] [settings]
+//   sidecrush_shot out.png [<param>=<value>] [hover=<id>] [settings]
 //                        [audio=<sidechain Hz>] [drag=<id>[:<dy>]] [scale=N]
 //                        [crop=x,y,w,h]
 //
@@ -78,17 +78,17 @@ int main (int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::puts ("usage: hardcap_shot out.png [param=value ...] [hover=id] "
+        std::puts ("usage: sidecrush_shot out.png [param=value ...] [hover=id] "
                    "[settings] [audio=hz] [drag=id] [scale=N] [crop=x,y,w,h]");
         return 1;
     }
 
     const juce::ScopedJuceInitialiser_GUI gui;
 
-    HardCapProcessor processor;
+    SideCrushProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
-    auto editor = std::make_unique<HardCapEditor> (processor);
+    auto editor = std::make_unique<SideCrushEditor> (processor);
 
     juce::String hoverId;
     juce::Rectangle<int> crop;

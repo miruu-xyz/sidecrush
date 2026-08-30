@@ -11,7 +11,7 @@
 // are drawn with `mix-blend-mode: color-dodge`, which has no JUCE equivalent --
 // #b1b1b1 dodged over the #101419 background lands at #344151, and only the
 // second number is any use here. Sampling bakes the blend in once.
-namespace hccolour
+namespace uicolour
 {
     const juce::Colour background  { 0xff101419 }; // page, and every well's edge
     const juce::Colour wellCentre  { 0xff090c10 }; // pill / scope interior, middle
@@ -47,7 +47,7 @@ namespace hccolour
 // Zalando Sans Expanded, embedded. Figma's sizes are em sizes, so they have to
 // go through withPointHeight -- withHeight would set ascent+descent instead and
 // come out visibly too small.
-juce::Font hcFont (float pointHeight);
+juce::Font uiFont (float pointHeight);
 
 // The recessed slot behind every pill and behind the scope: a radial darkening
 // of the page colour plus a top-left inner shadow. Figma draws it as a 50%
@@ -55,17 +55,39 @@ juce::Font hcFont (float pointHeight);
 void paintWell (juce::Graphics&, juce::Rectangle<float>, float corner,
                 juce::Colour centre, juce::Colour edge);
 
-// "HARDCAP by miruu", bottom-left of whichever panel is showing. The dim half is
+// "SIDECRUSH by miruu", bottom-left of whichever panel is showing. The dim half is
 // #717f8f dodged in Figma, so its rendered value depends on what is behind it
 // and the caller says which panel it is on.
 void paintWordmark (juce::Graphics&, juce::Rectangle<float> panel,
-                    juce::Colour dim = hccolour::brandDim);
+                    juce::Colour dim = uicolour::brandDim);
 
 //==============================================================================
-class HardCapLookAndFeel final : public juce::LookAndFeel_V4
+// The UI scale is one preference for the whole plug-in rather than one per
+// instance: it is a property of the screen it is being read on, not of the
+// session, so it belongs in the user's settings file and not in the saved
+// state. Every editor in the process shares this one object -- held through
+// juce::SharedResourcePointer, so it exists for exactly as long as some editor
+// does -- and each polls it on its own timer, which is how a change made in one
+// window reaches the others.
+//
+// Two processes open at once will not see each other's change: the file is read
+// when the first editor in a process opens it. The next one to launch picks it
+// up.
+struct ScalePreference
+{
+    ScalePreference();
+
+    float get() const;
+    void set (float scale);
+
+    std::unique_ptr<juce::PropertiesFile> file;
+};
+
+//==============================================================================
+class SideCrushLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
-    HardCapLookAndFeel();
+    SideCrushLookAndFeel();
 
     // Knob and fader geometry both come from the design's own proportions: the
     // pointer runs from 0.386R to R, and the fader travels the full track.
@@ -96,7 +118,7 @@ class Pill final : public juce::Component
 public:
     enum class Gesture { drag, cycle };
 
-    Pill (HardCapProcessor&, const char* paramId, Gesture, juce::String dimPrefix = {});
+    Pill (SideCrushProcessor&, const char* paramId, Gesture, juce::String dimPrefix = {});
 
     // Not backed by a parameter. The UI scale is a preference, and putting it in
     // the plug-in's automation list would be lying about what it is. Click-driven
@@ -221,13 +243,13 @@ private:
 class ActivityLed final : public juce::Component
 {
 public:
-    explicit ActivityLed (HardCapProcessor&);
+    explicit ActivityLed (SideCrushProcessor&);
 
     void paint (juce::Graphics&) override;
     void refresh();
 
 private:
-    HardCapProcessor& processor;
+    SideCrushProcessor& processor;
     float level = 0.0f;
 };
 
@@ -251,7 +273,7 @@ public:
         shape       // dragging SHAPE: the curve alone, no audio at all
     };
 
-    explicit ScopeComponent (HardCapProcessor&);
+    explicit ScopeComponent (SideCrushProcessor&);
 
     void paint (juce::Graphics&) override;
     void refresh();
@@ -268,7 +290,7 @@ public:
     std::function<void (bool)> onDragActive;
 
 private:
-    HardCapProcessor& processor;
+    SideCrushProcessor& processor;
     int64_t snapshotHead = 0;
     Overlay overlay = Overlay::traces;
 
@@ -277,7 +299,7 @@ private:
 
     // The DSP's own lookup table, not a second copy of the formula. The curve on
     // screen is then the curve the audio takes, clamp and quantisation included.
-    hardcap::ShapeTable shapeCurve;
+    sidecrush::ShapeTable shapeCurve;
 };
 
 //==============================================================================
@@ -287,7 +309,7 @@ private:
 class SettingsPanel final : public juce::Component
 {
 public:
-    explicit SettingsPanel (HardCapProcessor&);
+    explicit SettingsPanel (SideCrushProcessor&);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -311,7 +333,7 @@ private:
 };
 
 //==============================================================================
-class HardCapEditor final : public juce::AudioProcessorEditor,
+class SideCrushEditor final : public juce::AudioProcessorEditor,
                             private juce::Timer
 {
 public:
@@ -320,8 +342,8 @@ public:
     static constexpr int designWidth = 1056;
     static constexpr int designHeight = 326;
 
-    explicit HardCapEditor (HardCapProcessor&);
-    ~HardCapEditor() override;
+    explicit SideCrushEditor (SideCrushProcessor&);
+    ~SideCrushEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -345,8 +367,8 @@ private:
                     juce::Colour pointer, bool withReadout,
                     std::unique_ptr<SliderAttachment>&);
 
-    HardCapProcessor& proc;
-    HardCapLookAndFeel lookAndFeel;
+    SideCrushProcessor& proc;
+    SideCrushLookAndFeel lookAndFeel;
 
     juce::Slider preSlider, outputSlider, mixSlider, ceilingKnob, filterKnob, shapeKnob;
     std::unique_ptr<SliderAttachment> preAtt, outputAtt, mixAtt, ceilingAtt, filterAtt, shapeAtt;
@@ -363,6 +385,8 @@ private:
     bool thresholdDrag = false;
     bool shapeDrag = false;
 
+    // Shared with every other open editor, and outlives all of them.
+    juce::SharedResourcePointer<ScalePreference> scalePref;
     float scaleFactor = 1.0f;
 
     // The FILTER readout relabels itself in POST, and nothing else repaints it.
@@ -373,5 +397,5 @@ private:
     // first tick always syncs.
     float lastCeilingDb = 1.0e9f;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardCapEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SideCrushEditor)
 };

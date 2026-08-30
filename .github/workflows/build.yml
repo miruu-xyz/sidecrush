@@ -77,11 +77,16 @@ jobs:
         if: runner.os == 'macOS'
         uses: seanmiddleditch/gha-setup-ninja@v6
 
+      # Keyed on the workspace path, not just the OS. FetchContent's sub-build
+      # writes absolute paths into its own CMakeCache, so a cache restored into
+      # a differently-named checkout fails configure outright -- which is what
+      # the hardcap -> sidecrush rename did. The path is part of what the cache
+      # is valid for, so it belongs in the key.
       - name: Cache JUCE checkout
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: ${{ runner.os }}-juce-9.0.1
+          key: ${{ runner.os }}-juce-9.0.1-${{ github.workspace }}
 
       # No -G Ninja on Windows: with Ninja on the PATH, CMake picks up MinGW
       # rather than MSVC and JUCE refuses to build. The default Visual Studio
@@ -91,7 +96,7 @@ jobs:
         run: >
           cmake -B build ${{ matrix.generator }}
           -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-          -DHARDCAP_COPY_AFTER_BUILD=OFF
+          -DSIDECRUSH_COPY_AFTER_BUILD=OFF
 
       - name: Build
         run: cmake --build build --config $BUILD_TYPE --parallel 4
@@ -110,7 +115,7 @@ jobs:
       - name: Validate VST3
         shell: bash
         run: |
-          VST3=$(find build -name "HardCap.vst3" | head -1)
+          VST3=$(find build -name "SideCrush.vst3" | head -1)
           echo "validating $VST3"
           case "${{ runner.os }}" in
             macOS)   BIN="pluginval/pluginval.app/Contents/MacOS/pluginval" ;;
@@ -120,11 +125,36 @@ jobs:
           RUN="$BIN --strictness-level 10 --verbose --validate-in-process --skip-gui-tests --validate $VST3"
           if [ "${{ runner.os }}" = "Linux" ]; then xvfb-run -a $RUN; else $RUN; fi
 
+      # Zipped here rather than by upload-artifact, which stores files without
+      # their mode bits. A macOS .vst3 is a bundle whose binary has to stay
+      # executable, so an artifact assembled by the upload action downloads as a
+      # plug-in no host will load. The archive keeps the mode inside it, and the
+      # same file is what gets attached to the release.
+      - name: Package
+        shell: bash
+        run: |
+          SRC="build/SideCrush_artefacts/$BUILD_TYPE/VST3"
+          ZIP="SideCrush-${{ matrix.name }}.zip"
+
+          # Zipped from inside the artefacts folder so the archive holds the
+          # bundle and none of the build path around it. Relative paths on both
+          # sides: 7z is a native Windows binary and does not read the POSIX
+          # paths Git Bash hands it.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ( cd "$SRC" && 7z a -tzip "$ZIP" SideCrush.vst3 > /dev/null )
+          else
+            # -y stores symlinks as symlinks rather than copying their targets.
+            ( cd "$SRC" && zip -qry "$ZIP" SideCrush.vst3 )
+          fi
+
+          mv "$SRC/$ZIP" .
+          ls -l "$ZIP"
+
       - name: Upload VST3
         uses: actions/upload-artifact@v7
         with:
-          name: HardCap-${{ matrix.name }}
-          path: build/HardCap_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          name: SideCrush-${{ matrix.name }}
+          path: SideCrush-${{ matrix.name }}.zip
 
   sanitizers:
     name: ASan + UBSan
@@ -146,7 +176,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-asan/_deps
-          key: Linux-juce-9.0.1-asan
+          key: Linux-juce-9.0.1-asan-${{ github.workspace }}
 
       # LTO and the sanitizers do not get along; the recommended flags enable it
       # in Release, so the sanitizer build runs as RelWithDebInfo without it.
@@ -154,15 +184,59 @@ jobs:
         run: >
           cmake -B build-asan -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DHARDCAP_COPY_AFTER_BUILD=OFF
+          -DSIDECRUSH_COPY_AFTER_BUILD=OFF
           -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
       - name: Build tests
-        run: cmake --build build-asan --parallel 4 --target hardcap_engine_test hardcap_host_test
+        run: cmake --build build-asan --parallel 4 --target sidecrush_engine_test sidecrush_host_test
 
       - name: Run
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build-asan --output-on-failure
+
+  # Tags only, and the macOS slice only exists on tags -- see the setup job. The
+  # release is left as a draft: the tag is the trigger, publishing is a decision.
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l dist
+
+          # All three platforms or nothing: a release missing a platform is
+          # worse than a release that failed loudly.
+          for name in Linux Windows macOS; do
+            test -f "dist/SideCrush-$name.zip" || {
+              echo "missing dist/SideCrush-$name.zip"
+              exit 1
+            }
+          done
+
+          # The release may already exist: publishing a draft assembled by hand
+          # creates the tag, which fires this workflow against it. Replace the
+          # assets instead of failing, so re-running this job is safe.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.zip \
+              --draft \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
