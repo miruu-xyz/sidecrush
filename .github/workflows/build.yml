@@ -229,7 +229,14 @@ jobs:
             }
           done
 
-          gh release create "$GITHUB_REF_NAME" dist/*.zip \
-            --draft \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+          # The release may already exist: publishing a draft assembled by hand
+          # creates the tag, which fires this workflow against it. Replace the
+          # assets instead of failing, so re-running this job is safe.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.zip \
+              --draft \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
