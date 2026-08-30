@@ -4,6 +4,8 @@
 
 Recreates the crunch that happens when a sub-bass and a distorted signal are summed into a clipper: the sub's peaks push the other signal into the clipping region, where its detail is flattened rather than turned down. SideCrush does this deliberately and controllably, driving a clip ceiling ("the lid") from a sidechain signal at waveform rate.
 
+That is where the idea came from, not where it stops. Nothing in the design assumes a sub, a kick, or any particular band — the detector is a full-range signal path with a lowpass on it, and the controls are specified against "the sidechain" and "the carrier" rather than against a use case.
+
 Not a ring modulator, despite the original framing. There is no bipolar multiply and no phase inversion.
 
 ---
@@ -133,7 +135,7 @@ Use `juce::dsp::Oversampling` and report latency to the host.
 
 Both the carrier and the detector run at the full rate, and measurement says both have to. Alias floor against the fundamental, from `tests/alias.cpp`:
 
-| | 1x | 2x | 4x | 8x |
+| path | 1x | 2x | 4x | 8x |
 |---|---|---|---|---|
 | clipper | −32 dB | −48 dB | −60 dB | −69 dB |
 
@@ -147,7 +149,7 @@ What the routing *can* skip is arithmetic it has already done: with INT + STEREO
 
 Three modes, measured at 48 kHz in 512-sample blocks:
 
-| | factor | filter | alias floor | CPU |
+| mode | factor | filter | alias floor | CPU |
 |---|---|---|---|---|
 | HQ | 8x | linear phase FIR | −69 dB | 3.5 % |
 | LQ | 4x | minimum phase IIR | −60 dB | 1.3 % |
@@ -202,7 +204,7 @@ The scope keeps drawing the bipolar detector in PRE, so in WTF its top lobe is t
 
 How far the mode is taken. It moves **three** things across two halves of travel, and all three are at rest at 50 % — which is why 50 % is the original behaviour to the sample.
 
-| | detector | mid | invented side |
+| intensity | detector | mid | invented side |
 |---|---|---|---|
 | **0 %** | no split — both channels see the whole rectified sum | untouched | ×1 |
 | **50 %** | the full split described above | untouched | ×1 |
@@ -538,7 +540,7 @@ Everything specified above is built. These are the axes deliberately not taken y
 kept here because there is a plausible reason to revisit them — not because they are
 missing.
 
-| | why not now | when to revisit |
+| axis | why not now | when to revisit |
 |---|---|---|
 | True bipolar ring-mod mode | a different effect, and it needs a DEPTH control there is no panel space for | if the lid turns out to be tuneable enough that depth is the genuinely missing axis |
 | Preset browser | a real chunk of undesigned UI, and the control set is small enough to dial in from scratch | if `.vstpreset` files turn out to be worth shipping at all |

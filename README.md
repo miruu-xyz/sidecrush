@@ -33,7 +33,7 @@ Full details are in [SPEC.md](SPEC.md).
 
 Grab the newest build from the [releases page](https://github.com/miruu-xyz/sidecrush/releases) and drop the `SideCrush.vst3` bundle into your system's plug-in folder:
 
-| | |
+| Platform | Where it goes |
 |---|---|
 | macOS | `~/Library/Audio/Plug-Ins/VST3/` |
 | Windows | `C:\Program Files\Common Files\VST3\` |
@@ -55,10 +55,10 @@ SideCrush is a stereo (or mono) effect with a stereo sidechain input. Route the 
 
 ### Main controls
 
-| | |
+| Control | What it does |
 |---|---|
 | **PRE** | Carrier drive into the lid, −36…+36 dB. The aggression control, and the difference between "barely touched" and "annihilated". |
-| **CEILING** | Sidechain level at which the lid slams fully shut, −60…0 dB. The big dial, and the one worth automating. |
+| **CEILING** | Sidechain level at which the lid slams fully shut, −60…0 dB. The big dial, or drag anywhere in the scope — same thing. The one worth automating. |
 | **FLOOR** | Sidechain level below which nothing happens at all. Bottomed out it reads **INSTANT**, meaning the lid moves the moment the sidechain does. Can't be pushed above CEILING; it'll tell you when it's holding. |
 | **SHAPE** | Bipolar, −1…+1. Where in that window the lid breaks: late and gentle at CEILING (−1), linear (0), or immediately and hard at FLOOR (+1). |
 | **FILTER** | Lowpass on the detector, 20 Hz…20 kHz, then an OFF detent at the top. Click the caption underneath to flip the detector between PRE and POST. |
@@ -66,14 +66,12 @@ SideCrush is a stereo (or mono) effect with a stereo sidechain input. Route the 
 | **MIX** | Dry/wet, 0…100%. Latency-compensated, so parallel crushing doesn't comb. |
 | **OUT** | Output gain, −36…+36 dB. |
 | **CLIP** | Clip ceiling (lit red), or plain VCA ducking (dark). |
-| **the scope** | Not just a picture — drag anywhere in it to set CEILING. One pixel of drag is one pixel of threshold, because the display's vertical axis *is* amplitude. |
-| **the dot** | Lid-activity LED. Brightness tracks instantaneous gain reduction. |
 
 ### Advanced
 
 Behind the gear in the scope's upper right. The scope swaps out for the panel; the ✕ swaps it back.
 
-| | |
+| Setting | What it does |
 |---|---|
 | **STEREO / MONO / WTF** | How the detector's two channels relate. STEREO keeps them independent, MONO sums them, WTF splits the sum by sign and hands one half to each channel. The output is always stereo. |
 | **WTF** | How far to take WTF, 0…100%, and only shown when the link is on WTF. Right-click for the three settings that have names. |
@@ -82,31 +80,19 @@ Behind the gear in the scope's upper right. The scope swaps out for the panel; t
 | **SIGNAL EXT / INT** | External sidechain bus, or the main input driving its own lid. |
 | **SCALE** | UI size, 75…150%. A preference, not a parameter, so it stays out of your host's automation list. |
 
-By default everything runs at 8× oversampling, because a hard clip whose threshold moves every sample is about the most alias-prone thing you can build. Both paths need it — the clipper loses roughly 9 dB of alias floor per halving, and the detector can't be run slower and interpolated up, because the interpolation's images land exactly on the decimator's fold points.
+By default everything runs at 8× oversampling, because a hard clip whose threshold moves every sample is about the most alias-prone thing you can build. That does make it a bit of a CPU hog. **LQ** costs about a third of that and **YUCK** about a tenth, and switching between them never changes the plugin's latency, so you can leave it on YUCK while you write and move up when you mix.
 
-So yes, by default this thing is a bit of a CPU hog. **LQ** drops both paths to 4× minimum phase for about a third of the cost, at an alias floor of −60 dB instead of −69 dB. **YUCK** turns oversampling off entirely: 1×, no anti-imaging filter of any kind, a tenth of HQ's CPU, and a −32 dB alias floor. That last one isn't a saving, it's the point — the moving clip folds its own harmonics back down the spectrum and you hear every one of them. If you like that extra *crunch*, if you know what I mean.
-
-Switching quality never moves the reported latency (the cheaper paths are padded back out to match, so no host gets asked to renegotiate delay compensation mid-session) and the swap is ducked over a few milliseconds, because none of the three cascades line up and the seam would otherwise click.
+The numbers, and why both the clipper and the detector have to run oversampled, are in [SPEC §4.1](SPEC.md).
 
 ### Some settings worth messing with
 
-**CLIP** is the whole thesis. A multiply attenuates: at the sidechain's peak the output is silent and the carrier's detail is perfectly intact, merely scaled to nothing. A clamp flattens: the output is at full level and the carrier's detail is gone for good. Turn CLIP off if you want a very fast, very rude ducker; leave it on if you want the thing this plugin exists for. Then push PRE and find out how much of the carrier you're willing to lose.
+**SHAPE and FLOOR** together decide the shape of the gesture, not just its depth. FLOOR sets where the lid starts moving, SHAPE sets how it gets from there to shut. Pull FLOOR up and push SHAPE positive and the lid snaps rather than sweeps; drop FLOOR to INSTANT and pull SHAPE negative and it breathes instead. Same two dials, very different instruments.
 
-**SIGNAL INT** points the plugin at itself: the main input drives its own lid, and the effect stops being a sidechain trick and becomes a distortion. Your track's own low end clips its own top end at waveform rate, which is amplitude modulation with extra steps — subtle harmonics with a low FILTER and a modest CEILING, complete self-destruction without. No routing required, so it's the fastest way to hear what the thing does.
+**QUALITY is a sound, not just a CPU setting.** YUCK turns the anti-aliasing off entirely and lets the moving clip fold its own harmonics back down the spectrum. On something clean that's ugly. On something already filthy it's free grit — and a tenth of the CPU.
 
-**WTF** is the third link position and the reason this plugin has a personality. It sums the sidechain like MONO, then splits the sum by sign and hands one half to each channel: the modulator's positive peaks clip only the left, its negative peaks only the right. On a low sub the two clippers take turns and the carrier appears to pan — a pan that comes from two clippers alternating, not from any gain law. In POST the split happens before the filter, so each side gets its own envelope and the pan survives the smoothing. The scope draws it: the aperture's top edge is the left lid and its bottom edge the right, and the output is drawn once per channel — full brightness where the two channels agree, both fading back to 30% where the clippers are taking turns.
+**SIGNAL INT** points the plugin at itself: the input drives its own lid, so it stops being a sidechain trick and becomes a distortion. A low FILTER lets the signal's own bottom end modulate everything above it; FILTER off lets the whole thing modulate itself. No routing required, so it's the fastest way to hear what this does.
 
-The **WTF dial** next to it says how far to take that, and it reaches further in both directions than the switch alone can:
-
-- **0%** closes the split up and hands both channels the same lid. That's MONO.
-- **50%** is the behaviour above, and the default.
-- **100%** stops throwing away the part of the carrier the lid cuts, and hands it to *both* channels with opposite signs instead — so in stereo it's still there, wide and on the wrong side of the lid, and on the way to mono it cancels.
-
-That last one is about what a mono listener hears. Below 100%, WTF half-cancels when summed: at any instant one channel is clipped and the other isn't, so a phone speaker gets a weaker plugin than the room does. At 100% the sum is *exactly* the MONO link, while the stereo image comes apart.
-
-The top half of that travel also **widens** what the effect invents, up to double — the same thing a Utility patched in after the plugin would do, and mono-blind for the same reason: what it scales goes to one channel and comes off the other, so the sum never sees it. And it only scales the side the effect invented, not the side your input already had, so material the lid isn't touching comes through untouched.
-
-That widening is there to pay for something. 50% sounds like a wider *position* than a bare 100% does, and that isn't a bug: at 50% the lid closing to zero silences one channel outright — a 53 dB alternating level difference, the strongest lateralisation cue there is — and exact mono cancellation makes that impossible, because it forces the two channels to equal level and opposite sign at the moment the lid shuts. Decorrelation is the only kind of width the arithmetic leaves, so 100% takes as much of it as it can get. That costs no headroom at all in PRE, and up to 6 dB of it in POST, where the mono lid is no longer tied to the two split ones. Trim OUT if that matters; the mono sum is unaffected either way.
+**WTF** splits the sidechain by sign and hands one half to each channel — positive peaks clip the left, negative peaks the right. The two clippers take turns and the sound appears to move, which is a pan that no gain law can make. The dial beside it says how far to take that: 0% is MONO, 50% is the default, and 100% trades the movement for exact phase cancellation, so a mono listener hears the same thing the room does. Right-click it for those three by name. [SPEC §4.5](SPEC.md) has the whole argument.
 
 ## Building
 
@@ -122,7 +108,7 @@ ctest --test-dir build --output-on-failure
 
 The VST3 lands in `build/SideCrush_artefacts/Release/VST3/`, with a standalone app beside it, and is **copied into your user plug-in folder after every build** so it's immediately loadable in a DAW:
 
-| | |
+| Platform | Destination |
 |---|---|
 | macOS | `~/Library/Audio/Plug-Ins/VST3/` |
 | Windows | `%COMMONPROGRAMFILES%\VST3\` |
@@ -171,8 +157,6 @@ Arguments are `<id>=<value>` for any parameter (`ceiling=-24`, `clip=0`), plus `
 
 Done, as far as the original vision goes. The DSP matches the spec, and the interface implements the Figma design — layout, typeface, dial and fader artwork, the recessed wells, the glows, the oscilloscope overlays, and the hover and engaged states from the file's component variants.
 
-Two known cosmetic gaps: the readouts print the parameters' own strings (`-6.0 dB`) where the design shows a compact `0dB`, and the design's fader caps are parked at a position that doesn't correspond to their labelled value, so cap travel is mapped linearly across the track instead.
-
 If inspiration strikes with additional ideas, or issues and bugs come in, I'll update accordingly. Outside of that, consider this plugin finished for now.
 
 ## Licence & copyright
@@ -182,5 +166,9 @@ MIT — see [LICENSE](LICENSE). Do whatever you want, but please don't be a dick
 Built with [JUCE](https://juce.com) under the free Starter tier; JUCE's own modules remain under the JUCE licence. If you fork this and ship it, you need your own JUCE licence — which is normal, and free below $20k/year.
 
 The interface is set in Zalando Sans Expanded, embedded in the binary under the SIL Open Font Licence 1.1 — see [Resources/fonts/OFL.txt](Resources/fonts/OFL.txt).
+
+---
+
+<br>
 
 Designed with love. By miruu.
