@@ -821,13 +821,66 @@ void ScopeComponent::paint (juce::Graphics& g)
             const auto outputR = wtf ? buildTrace ([] (const ScopeFrame& f) { return f.outR; })
                                      : juce::Path {};
 
+            // WTF draws one output per channel, and the two together have to read
+            // as one line where the channels agree and as two where they do not.
+            // The left carries that: it is drawn at full strength wherever the
+            // two outputs are the same signal -- as bright as the trace every
+            // other mode draws, with the right hidden underneath it -- and fades
+            // back to 30% as they come apart, so a small deviation looks small
+            // instead of switching the whole trace to a ghost. The right sits at
+            // 30% throughout; where it matters it is not underneath anything.
+            constexpr auto apart = 0.3f;
+
+            // Roughly two pixels of separation at this display's scale. Closer
+            // than that and the two traces are one line, so splitting the ink
+            // between them would only dim it for no reading.
+            constexpr auto fullyApart = 0.02f;
+
             const auto strokeOutput = [&] (float alpha)
             {
-                g.setColour (hccolour::output.withAlpha (wtf ? alpha * 0.5f : alpha));
-                g.strokePath (output, stroke (1.4f));
+                const auto lit = [] (float a) { return hccolour::output.withAlpha (a); };
+                const auto line = stroke (1.4f);
 
-                if (wtf)
-                    g.strokePath (outputR, stroke (1.4f));
+                if (! wtf)
+                {
+                    g.setColour (lit (alpha));
+                    g.strokePath (output, line);
+                    return;
+                }
+
+                g.setColour (lit (alpha * apart));
+                g.strokePath (outputR, line);
+
+                // How lit the left trace is over one column, from the widest gap
+                // between the two channels inside it -- widest rather than mean,
+                // so that a deviation cannot hide between two of the stops below.
+                const auto litAt = [&] (int column)
+                {
+                    const auto from = startIndex + count * column / columns;
+                    const auto to = juce::jmax (from + 1, startIndex + count * (column + 1) / columns);
+
+                    auto widest = 0.0f;
+
+                    for (auto i = from; i < to; ++i)
+                        widest = juce::jmax (widest, std::abs (fifo.at (i).out - fifo.at (i).outR));
+
+                    return lit (alpha * juce::jmap (juce::jmin (widest, fullyApart),
+                                                    0.0f, fullyApart, 1.0f, apart));
+                };
+
+                // A stop per column, because the agreement turns over at the
+                // carrier's rate and not the sidechain's: inside one half of the
+                // sub the lid holds one channel down at its peaks while both run
+                // free through the zero crossings, so the trace brightens and
+                // dims within a single cycle.
+                juce::ColourGradient agreement { litAt (0), bounds.getX(), mid,
+                                                 litAt (columns - 1), bounds.getRight(), mid, false };
+
+                for (int column = 1; column < columns - 1; ++column)
+                    agreement.addColour ((double) column / (double) (columns - 1), litAt (column));
+
+                g.setGradientFill (agreement);
+                g.strokePath (output, line);
             };
 
             // In POST the detector is a rectified envelope, and drawn literally

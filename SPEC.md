@@ -192,7 +192,9 @@ Two things follow from where the split sits:
 The scope keeps drawing the bipolar detector in PRE, so in WTF its top lobe is the left channel's lid and its bottom lobe the right's — and in this mode the display follows that all the way through, so that it looks the way it sounds:
 
 - **the aperture splits.** The mask closing from the top is the left lid, the one closing from the bottom is the right. Everywhere else the two lids are the same signal and the aperture is symmetric; here it visibly alternates, top then bottom, at the sidechain's own rate.
-- **the output is drawn twice, at 50% each.** One trace per channel. Where the two agree they overlap into the same line the other modes draw; where the lids are taking turns they part, and the half that is being held down is visible against the half that is not.
+- **the output is drawn once per channel.** The right sits at 30% throughout. The left carries the reading: full strength wherever the two outputs are the same signal — so that stretch of the trace is exactly as bright as the single line every other mode draws, with the right hidden underneath it — fading to the same 30% as the two come apart. The ramp is linear over about two pixels of separation at the display's own scale, which is where two traces stop being one line. So agreement reads as brightness: inside one half of the sub the lid holds one channel down at its peaks and lets both run free through the zero crossings, and the trace brightens and dims within a single carrier cycle to say so.
+
+  The alpha is a horizontal `ColourGradient` on the stroke with **a stop per pixel column**, taking the widest gap between the two channels inside that column. Coarser stops are what the first attempt did and they are wrong here: the gap turns over at the carrier's rate, not the sidechain's, so a stop every few columns smears every bright stretch away and the whole trace sits at 30%.
 
 On a mono instance only the positive half is left, since there is no second channel to hand the other one to.
 
@@ -249,7 +251,7 @@ no designed popup anywhere in the file.
 | sidechain | cyan line, or a cyan body | the detector — the signal the thresholds measure. Bipolar in PRE; in POST the envelope and its mirror image |
 | lid | white mask at 8% | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
 | output | white line | slams flat against the aperture as it closes |
-| **in WTF** | two half-opacity outputs, split aperture | see 4.5 |
+| **in WTF** | one output per channel, split aperture | see 4.5 |
 | ±CEILING | cyan gradient bands | from each edge inward to the threshold; the clamped region |
 | ±FLOOR | red band | symmetric around the centre; collapses to nothing at INSTANT |
 
