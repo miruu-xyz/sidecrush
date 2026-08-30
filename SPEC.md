@@ -312,9 +312,10 @@ from a 1:1 render of the frame** (`Resources/reference/figma-1-11.png`) rather
 than copied from the layer list — #b1b1b1 dodged over the #101419 background is
 #344151, and only the second number can be used directly.
 
-Controls: PRE fader, CEILING dial (large), FILTER dial, SHAPE dial, SLOPE pill,
-FLOOR pill, OUT fader, a CLIP toggle in the scope's lower-right corner, and a
-gear in the upper-right that swaps the scope for a settings panel carrying
+Controls: PRE fader, CEILING dial (large) with the activity LED above it, FILTER
+dial, SHAPE dial, SLOPE pill, FLOOR pill, MIX fader, OUT fader, a CLIP toggle in
+the scope's lower-right corner, and a gear in the upper-right that swaps the
+scope for a settings panel carrying
 STEREO / HQ / FILTER PRE / SIGNAL EXT, and SCALE below them — with WTF beside
 SCALE on that last row, where it is present **only** while the link is on WTF.
 It is hidden rather than dimmed because SCALE simply re-centres when it goes;
@@ -519,23 +520,33 @@ the symptom would be a band that does not sit where the floor is.
 
 ## 6. Build and distribution
 
-- **JUCE 9 + CMake**, VST3 (plus standalone for development)
+- **JUCE 9 + CMake**, VST3 plus a standalone build.
+- **macOS builds universal** (arm64 + x86-64). Ableton Live's plug-in scanner runs as x86-64 even on Apple Silicon and rejects an arm64-only bundle outright, so the slice has to be there. Deployment target 10.15.
 - **MIT** for this repository. JUCE is used under the free **Starter** tier — its own modules remain under the JUCE licence, and MIT demands nothing of code it links against, so there is no conflict. Forkers need their own JUCE licence, which is normal.
   - GPLv3 was rejected: it conflicts with the proprietary Starter terms unless a linking exception is granted.
   - The VST3 SDK is MIT as of late 2025, so no Steinberg agreement is required.
 - **CI** (GitHub Actions): Linux x64 and Windows x64 on every push, `pluginval` at strictness 10, plus an ASan/UBSan job. macOS universal runs on tags and manual dispatch only — it bills at 10x on a private repo and is the one platform testable locally for free.
-- **No preset browser.** Host-saved state only, plus a handful of `.vstpreset` files in the repo as starting points. Ship one that turns CLIP on with PRE around +12 dB — that is where the signature sound lives.
+- **State is host-saved only.** No presets ship and there is no preset browser; the defaults are the starting point, and the signature sound is CLIP on with PRE around +12 dB.
 - Figma SVGs exported to `Resources/` and loaded via `juce::Drawable`. JUCE 9's lunasvg-based parser handles the radial gradients, blend modes and clip paths this design uses; JUCE 8's would not have.
+- The plugin is **unsigned and unnotarised**, so a macOS user has to clear the quarantine attribute by hand once. Signing needs a paid Developer ID and is not worth it at this scale.
 
 ---
 
-## 7. Deliberately not built
+## 7. Left open
 
-| | why | when to revisit |
+Everything specified above is built. These are the axes deliberately not taken yet,
+kept here because there is a plausible reason to revisit them — not because they are
+missing.
+
+| | why not now | when to revisit |
 |---|---|---|
-| True bipolar ring-mod mode | different effect, needs a DEPTH control, no panel space | if the lid turns out to be tuneable enough that depth is the missing axis |
-| CROSS sidechain routing (L↔R) | MONO+CROSS collapses to INT — a dead option in a four-way matrix | never, unless SC LINK is redesigned |
-| Auto-makeup gain | fights the effect; the whole point is that the output ducks | never |
-| Preset browser | real chunk of undesigned UI | if `.vstpreset` files prove insufficient |
-| Parameter smoothing | ramps sand off the roughness; step-per-block on PRE and CEILING is the character, not a defect | never |
-| mono → stereo bus layout | doubles the matrix for nothing | if a user actually asks |
+| True bipolar ring-mod mode | a different effect, and it needs a DEPTH control there is no panel space for | if the lid turns out to be tuneable enough that depth is the genuinely missing axis |
+| Preset browser | a real chunk of undesigned UI, and the control set is small enough to dial in from scratch | if `.vstpreset` files turn out to be worth shipping at all |
+| mono to stereo bus layout | doubles the layout matrix for nothing today | if a user actually asks |
+| AU, AAX, CLAP | VST3 covers the hosts this was built against, and each extra format is its own validation surface | if there is demand, AU first |
+
+Three more are settled rather than deferred, and are not coming back:
+
+- **No parameter smoothing.** Ramps sand off the roughness; the step-per-block on PRE and CEILING is the character, not a defect. Spelled out in 2.
+- **No auto-makeup gain.** It fights the effect — the whole point is that the output ducks.
+- **No CROSS sidechain routing (L↔R).** MONO+CROSS collapses to INT, so it is a dead option in a four-way matrix.
