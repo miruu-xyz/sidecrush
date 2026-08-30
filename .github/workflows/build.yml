@@ -120,11 +120,36 @@ jobs:
           RUN="$BIN --strictness-level 10 --verbose --validate-in-process --skip-gui-tests --validate $VST3"
           if [ "${{ runner.os }}" = "Linux" ]; then xvfb-run -a $RUN; else $RUN; fi
 
+      # Zipped here rather than by upload-artifact, which stores files without
+      # their mode bits. A macOS .vst3 is a bundle whose binary has to stay
+      # executable, so an artifact assembled by the upload action downloads as a
+      # plug-in no host will load. The archive keeps the mode inside it, and the
+      # same file is what gets attached to the release.
+      - name: Package
+        shell: bash
+        run: |
+          SRC="build/SideCrush_artefacts/$BUILD_TYPE/VST3"
+          ZIP="SideCrush-${{ matrix.name }}.zip"
+
+          # Zipped from inside the artefacts folder so the archive holds the
+          # bundle and none of the build path around it. Relative paths on both
+          # sides: 7z is a native Windows binary and does not read the POSIX
+          # paths Git Bash hands it.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ( cd "$SRC" && 7z a -tzip "$ZIP" SideCrush.vst3 > /dev/null )
+          else
+            # -y stores symlinks as symlinks rather than copying their targets.
+            ( cd "$SRC" && zip -qry "$ZIP" SideCrush.vst3 )
+          fi
+
+          mv "$SRC/$ZIP" .
+          ls -l "$ZIP"
+
       - name: Upload VST3
         uses: actions/upload-artifact@v7
         with:
           name: SideCrush-${{ matrix.name }}
-          path: build/SideCrush_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          path: SideCrush-${{ matrix.name }}.zip
 
   sanitizers:
     name: ASan + UBSan
@@ -166,3 +191,40 @@ jobs:
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build-asan --output-on-failure
+
+  # Tags only, and the macOS slice only exists on tags -- see the setup job. The
+  # release is left as a draft: the tag is the trigger, publishing is a decision.
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l dist
+
+          # All three platforms or nothing: a release missing a platform is
+          # worse than a release that failed loudly.
+          for name in Linux Windows macOS; do
+            test -f "dist/SideCrush-$name.zip" || {
+              echo "missing dist/SideCrush-$name.zip"
+              exit 1
+            }
+          done
+
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

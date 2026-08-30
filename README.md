@@ -2,7 +2,7 @@
 
 Were you ever eyeing that dirty crunchy sub distortion for your perfectly clean mix, but didn't want to ruin your exquisitely crisp sub?
 
-SideCrush can satiate your sick needs as a delectable **sidechain-driven dynamic hard clipper** (or a VCA, if you turn CLIP off). VST3 and standalone, by [miruu](https://github.com/miruu-xyz).
+SideCrush can satiate your sick needs as a delectable **sidechain-driven dynamic hard clipper** (or a VCA, if you turn CLIP off). VST3, by [miruu](https://github.com/miruu-xyz).
 
 ![SideCrush](Resources/screenshot.png)
 
@@ -31,7 +31,7 @@ Full details are in [SPEC.md](SPEC.md).
 
 ## Installing
 
-Grab the newest build from the [releases page](https://github.com/miruu-xyz/sidecrush/releases) and drop the `SideCrush.vst3` bundle into your system's plug-in folder:
+Grab the zip for your platform from the [releases page](https://github.com/miruu-xyz/sidecrush/releases), unzip it, and drop `SideCrush.vst3` into your system's plug-in folder:
 
 | Platform | Where it goes |
 |---|---|
