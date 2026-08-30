@@ -13,9 +13,8 @@
 // second number is any use here. Sampling bakes the blend in once.
 namespace hccolour
 {
-    const juce::Colour background  { 0xff101419 }; // page
+    const juce::Colour background  { 0xff101419 }; // page, and every well's edge
     const juce::Colour wellCentre  { 0xff090c10 }; // pill / scope interior, middle
-    const juce::Colour wellEdge    { 0xff101419 }; // ... and at its edges
     const juce::Colour scopeCentre { 0xff080a0d };
     const juce::Colour scopeEdge   { 0xff0d1014 };
 
@@ -99,8 +98,9 @@ public:
     Pill (HardCapProcessor&, const char* paramId, Gesture, juce::String dimPrefix = {});
 
     // Not backed by a parameter. The UI scale is a preference, and putting it in
-    // the plug-in's automation list would be lying about what it is.
-    Pill (juce::String dimPrefix, Gesture);
+    // the plug-in's automation list would be lying about what it is. Click-driven
+    // by definition: with nothing to read there is nothing to drag.
+    explicit Pill (juce::String dimPrefix);
 
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -124,7 +124,7 @@ public:
     // between, so dragging the slope selector moves the filter instead.
     std::function<juce::RangedAudioParameter*()> chooseDragTarget;
 
-    void setOutlined (bool shouldOutline) { outlined = shouldOutline; }
+    bool outlined = false; // CLIP draws a permanent border; the others do not
 
     // CLIP is the only control that recolours itself when engaged. Left clear,
     // a pill keeps the same look in both states.
@@ -148,7 +148,6 @@ private:
     const Gesture gesture;
     const juce::String prefix;
 
-    bool outlined = false; // CLIP draws a permanent border; the others do not
     bool hovered = false;
 
     juce::RangedAudioParameter* dragTarget = nullptr; // non-null while dragging

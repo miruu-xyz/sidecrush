@@ -53,12 +53,12 @@ namespace
         on ? c.mouseEnter (e) : c.mouseExit (e);
     }
 
-    // A real press and vertical drag, so what a drag actually *does* to a value
-    // can be checked, not just what it does to the display. The button stays
-    // down: the point is to render the state mid-gesture. releaseDrag lifts it
-    // again once the snapshot is taken -- a parameter whose beginChangeGesture
-    // is never matched asserts when it is destroyed, and that noise would hide
-    // a real assertion later.
+    // A real press and vertical drag -- the same path a host's mouse takes, so
+    // onDragStart and onDragActive fire on their own rather than being poked
+    // through a cast. The button stays down: the point is to render the state
+    // mid-gesture. releaseDrag lifts it again once the snapshot is taken -- a
+    // parameter whose beginChangeGesture is never matched asserts when it is
+    // destroyed, and that noise would hide a real assertion later.
     void dragBy (juce::Component& c, float dy)
     {
         const auto centre = c.getLocalBounds().getCentre().toFloat();
@@ -120,8 +120,9 @@ int main (int argc, char** argv)
         if (key == "scale")      { scale = value.getFloatValue(); continue; }
         if (key == "hover")      { hoverId = value; continue; }
         if (key == "audio")      { sidechainHz = value.getDoubleValue(); continue; }
-        // drag=<id> just raises the dragging state; drag=<id>:<dy> presses and
-        // pulls it that many pixels, negative being upwards.
+        // drag=<id> presses the control at its centre and holds; drag=<id>:<dy>
+        // also pulls it that many pixels, negative being upwards. A linear fader
+        // jumps to the press position, exactly as it would under a real mouse.
         if (key == "drag")
         {
             dragId = value.upToFirstOccurrenceOf (":", false, false);
@@ -190,8 +191,6 @@ int main (int argc, char** argv)
     // nothing pumps the message queue here.
     editor->refreshFromParameters();
 
-    // Same idea as hover: a drag is normally announced by JUCE's mouse handling,
-    // and these are the public callbacks it would fire.
     if (dragId.isNotEmpty())
     {
         auto* target = findById (*editor, dragId);
@@ -202,29 +201,8 @@ int main (int argc, char** argv)
             return 1;
         }
 
-        if (dragPixels != 0.0f)
-        {
-            dragBy (*target, dragPixels);
-            held = target;
-        }
-        else if (auto* slider = dynamic_cast<juce::Slider*> (target); slider != nullptr && slider->onDragStart)
-        {
-            slider->onDragStart();
-        }
-        else if (auto* pill = dynamic_cast<Pill*> (target); pill != nullptr && pill->onDragActive)
-        {
-            pill->onDragActive (true);
-        }
-        else if (auto* display = dynamic_cast<ScopeComponent*> (target);
-                 display != nullptr && display->onDragActive)
-        {
-            display->onDragActive (true);
-        }
-        else
-        {
-            std::printf ("nothing draggable with id: %s\n", dragId.toRawUTF8());
-            return 1;
-        }
+        dragBy (*target, dragPixels);
+        held = target;
 
         editor->refreshFromParameters();
     }

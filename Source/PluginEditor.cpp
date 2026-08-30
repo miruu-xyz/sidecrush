@@ -172,7 +172,7 @@ juce::Label* HardCapLookAndFeel::createSliderTextBox (juce::Slider& slider)
 void HardCapLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
 {
     const juce::Rectangle<float> r { 0.0f, 0.0f, (float) w, (float) h };
-    paintWell (g, r, 4.0f, hccolour::wellCentre, hccolour::wellEdge);
+    paintWell (g, r, 4.0f, hccolour::wellCentre, hccolour::background);
     g.setColour (hccolour::hairline);
     g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
 }
@@ -185,8 +185,8 @@ Pill::Pill (HardCapProcessor& p, const char* paramId, Gesture g, juce::String di
     attachment = std::make_unique<juce::ParameterAttachment> (*param, [this] (float) { repaint(); });
 }
 
-Pill::Pill (juce::String dimPrefix, Gesture g)
-    : gesture (g), prefix (std::move (dimPrefix))
+Pill::Pill (juce::String dimPrefix)
+    : gesture (Gesture::cycle), prefix (std::move (dimPrefix))
 {
 }
 
@@ -205,11 +205,11 @@ void Pill::paint (juce::Graphics& g)
         shape.addRoundedRectangle (r, 4.0f);
         juce::DropShadow { onTint.withAlpha (0.30f), 24, {} }.drawForPath (g, shape);
 
-        paintWell (g, r, 4.0f, juce::Colour { 0xff740000 }.withAlpha (0.55f), hccolour::wellEdge);
+        paintWell (g, r, 4.0f, juce::Colour { 0xff740000 }.withAlpha (0.55f), hccolour::background);
     }
     else
     {
-        paintWell (g, r, 4.0f, hccolour::wellCentre, hccolour::wellEdge);
+        paintWell (g, r, 4.0f, hccolour::wellCentre, hccolour::background);
     }
 
     if (hovered)
@@ -856,7 +856,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 
 //==============================================================================
 SettingsPanel::SettingsPanel (HardCapProcessor& p)
-    : scale ("SCALE", Pill::Gesture::cycle),
+    : scale ("SCALE"),
       link (p, ids::scLink, Pill::Gesture::cycle),
       hq (p, ids::hq, Pill::Gesture::cycle),
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
@@ -953,7 +953,7 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 
     slopePill.onClick = [this] { showSlopeMenu(); };
 
-    clipPill.setOutlined (true);
+    clipPill.outlined = true;
     clipPill.onTint = hccolour::clipOn;
     clipPill.dimWhenOff = true;
     clipPill.overrideText = [] { return juce::String ("CLIP"); };
