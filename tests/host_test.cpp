@@ -13,16 +13,6 @@
 namespace
 {
 
-// Choice parameters take a normalised value, and the fraction that lands on a
-// given index moves whenever an option is added -- which is exactly how a
-// two-way switch grown to three silently redirects every existing call. Name
-// the index and let the parameter do the arithmetic.
-void setChoice (HardCapProcessor& p, const char* id, int index)
-{
-    auto* param = p.apvts.getParameter (id);
-    param->setValueNotifyingHost (param->convertTo0to1 ((float) index));
-}
-
 // Stereo in, stereo sidechain, stereo out -- what most of these tests want.
 juce::AudioProcessor::BusesLayout stereoLayout()
 {
@@ -530,25 +520,6 @@ void floorReadsAsCappedByCeiling()
                      - hardcap::Engine::floorHeadroomDb) < 0.01f);
 }
 
-// The pills list a parameter's own choices on right-click, and guard on
-// getNumSteps so that a continuous parameter -- which would answer with hundreds
-// of steps and build a string for every one of them -- is never asked. That
-// guard is only as good as the split below.
-void onlyChoiceParametersAreListable()
-{
-    HardCapProcessor p;
-
-    const auto steps = [&p] (const char* id) { return p.apvts.getParameter (id)->getNumSteps(); };
-
-    for (auto* id : { ids::scLink, ids::quality, ids::filterPos, ids::scSource,
-                      ids::slope, ids::clip })
-        CHECK (steps (id) >= 2 && steps (id) <= 32);
-
-    for (auto* id : { ids::floorDb, ids::ceiling, ids::filterHz, ids::pre,
-                      ids::output, ids::mix, ids::shape })
-        CHECK (steps (id) > 32);
-}
-
 } // namespace
 
 int main()
@@ -568,7 +539,6 @@ int main()
     dryPathIsAligned();
     outputTrimsTheBlend();
     floorReadsAsCappedByCeiling();
-    onlyChoiceParametersAreListable();
     statePersists();
     rejectsSillyLayouts();
 

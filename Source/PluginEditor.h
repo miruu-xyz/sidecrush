@@ -137,12 +137,9 @@ public:
     // a pill keeps the same look in both states.
     juce::Colour onTint { 0x00000000 };
 
-    // CLIP when off reads as a legend rather than a live value, so the design
-    // drops its text to the caption tone.
-    bool dimWhenOff = false;
-
-    // Set when a pill has more states than dimWhenOff can describe: QUALITY has
-    // three, and the design gives each of them its own tone.
+    // How the pill's text is coloured, when the plain value tone is not it:
+    // QUALITY gives each of its three states its own, and CLIP dims to the
+    // caption tone when off. Left unset, a pill reads in the value tone.
     std::function<juce::Colour()> textColour;
 
 private:

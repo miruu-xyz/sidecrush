@@ -3,11 +3,35 @@
 #include <BinaryData.h>
 
 #include <limits>
+#include <utility>
 
 namespace
 {
     // The UI scales the editor offers, in the order the switch cycles them.
     constexpr float scaleSteps[] { 0.75f, 1.0f, 1.25f, 1.5f };
+
+    // Every menu here is the same shape: a list, a tick on the current entry,
+    // and an index handed back. `target` is what the menu hangs off and what
+    // keeps it honest -- the callback is dropped if that component has gone,
+    // which is also what makes it safe for the callback to touch the editor the
+    // pill belongs to.
+    void showPillMenu (juce::Component& target, const juce::StringArray& items, int current,
+                       std::function<void (int)> chosen)
+    {
+        juce::PopupMenu menu;
+        menu.setLookAndFeel (&target.getLookAndFeel());
+
+        for (int i = 0; i < items.size(); ++i)
+            menu.addItem (i + 1, items[i], true, i == current);
+
+        menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (&target),
+                            [safe = juce::Component::SafePointer<juce::Component> (&target),
+                             pick = std::move (chosen)] (int choice)
+                            {
+                                if (choice > 0 && safe != nullptr)
+                                    pick (choice - 1);
+                            });
+    }
 }
 
 //==============================================================================
@@ -205,7 +229,6 @@ void Pill::paint (juce::Graphics& g)
     const auto r = getLocalBounds().toFloat().reduced (0.5f);
     const auto on = param != nullptr && param->getValue() > 0.5f;
     const auto engaged = on && onTint.isOpaque();
-    const auto dormant = dimWhenOff && ! on;
 
     if (engaged)
     {
@@ -243,10 +266,7 @@ void Pill::paint (juce::Graphics& g)
     drawLabel (g, overrideText != nullptr ? overrideText()
                                           : param != nullptr ? param->getCurrentValueAsText()
                                                              : juce::String(),
-               textColour != nullptr ? textColour()
-                                     : engaged ? hccolour::clipOn
-                                     : dormant ? hccolour::label
-                                               : hccolour::value);
+               textColour != nullptr ? textColour() : hccolour::value);
 }
 
 void Pill::drawLabel (juce::Graphics& g, juce::String text, juce::Colour bright)
@@ -280,38 +300,22 @@ void Pill::drawLabel (juce::Graphics& g, juce::String text, juce::Colour bright)
 
 void Pill::showChoiceMenu()
 {
-    if (param == nullptr)
-        return;
-
-    // Only for a parameter that really is a list. Asked for its value strings a
-    // continuous one would build a string per step, which is why this is checked
-    // before the strings are asked for rather than after.
-    if (const auto steps = param->getNumSteps(); steps < 2 || steps > 32)
-        return;
-
-    const auto choices = param->getAllValueStrings();
+    // Empty unless the parameter really is a list: JUCE only builds the value
+    // strings for a discrete one, so a continuous parameter is never asked to
+    // name its hundreds of steps.
+    const auto choices = param != nullptr ? param->getAllValueStrings() : juce::StringArray {};
 
     if (choices.size() < 2)
         return;
 
     const auto last = choices.size() - 1;
-    const auto current = juce::roundToInt (param->getValue() * (float) last);
 
-    juce::PopupMenu menu;
-    menu.setLookAndFeel (&getLookAndFeel());
-
-    for (int i = 0; i <= last; ++i)
-        menu.addItem (i + 1, choices[i], true, i == current);
-
-    menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (this),
-                        [safe = juce::Component::SafePointer<Pill> (this), last] (int choice)
-                        {
-                            if (choice <= 0 || safe == nullptr)
-                                return;
-
-                            safe->attachment->setValueAsCompleteGesture (
-                                safe->param->convertFrom0to1 ((float) (choice - 1) / (float) last));
-                        });
+    showPillMenu (*this, choices, juce::roundToInt (param->getValue() * (float) last),
+                  [this, last] (int index)
+                  {
+                      attachment->setValueAsCompleteGesture (
+                          param->convertFrom0to1 ((float) index / (float) last));
+                  });
 }
 
 void Pill::mouseEnter (const juce::MouseEvent&) { hovered = true;  repaint(); }
@@ -369,7 +373,13 @@ void Pill::mouseUp (const juce::MouseEvent& e)
     // A click is a press and release that moved nothing, so it can still mean
     // something on a pill that also drags -- that is how the slope selector both
     // sweeps the filter and opens its menu.
-    if (! e.mouseWasClicked())
+    //
+    // Right-clicks are not clicks in that sense: mouseDown already gave one to
+    // the menu and returned, but the release still arrives here, and acting on
+    // it too would open the list and step past the value in one gesture. The
+    // modifiers on a mouse-up are the ones from before the button came up, so
+    // the right button is still set here.
+    if (! e.mouseWasClicked() || e.mods.isPopupMenu())
         return;
 
     if (onClick != nullptr)
@@ -750,6 +760,17 @@ void ScopeComponent::paint (juce::Graphics& g)
             const auto firstX = bounds.getX() + 0.5f;
             const auto lastX = bounds.getX() + (float) (columns - 1) + 0.5f;
 
+            // Which samples land in one pixel column. The WTF brightness below
+            // walks the same ranges, so this is defined once rather than twice
+            // -- two copies could disagree about where a column ends and the
+            // gradient would then be lit a column out from the trace it tints.
+            const auto columnRange = [&] (int column)
+            {
+                const auto from = startIndex + count * column / columns;
+                return std::pair { from, juce::jmax (from + 1,
+                                                     startIndex + count * (column + 1) / columns) };
+            };
+
             const auto buildTrace = [&] (auto value)
             {
                 juce::Path path;
@@ -762,8 +783,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 
                 for (int column = 0; column < columns; ++column)
                 {
-                    const auto from = startIndex + count * column / columns;
-                    const auto to = juce::jmax (from + 1, startIndex + count * (column + 1) / columns);
+                    const auto [from, to] = columnRange (column);
 
                     auto low = std::numeric_limits<float>::max();
                     auto high = std::numeric_limits<float>::lowest();
@@ -821,58 +841,55 @@ void ScopeComponent::paint (juce::Graphics& g)
             const auto outputR = wtf ? buildTrace ([] (const ScopeFrame& f) { return f.outR; })
                                      : juce::Path {};
 
-            // WTF draws one output per channel, and the two together have to read
-            // as one line where the channels agree and as two where they do not.
-            // The left carries that: it is drawn at full strength wherever the
-            // two outputs are the same signal -- as bright as the trace every
-            // other mode draws, with the right hidden underneath it -- and fades
-            // back to 30% as they come apart, so a small deviation looks small
-            // instead of switching the whole trace to a ghost. The right sits at
-            // 30% throughout; where it matters it is not underneath anything.
+            // WTF draws one output per channel, and the two together have to
+            // read as one line where the channels agree and as two where they do
+            // not. The right sits at `apart` throughout; the left carries the
+            // reading -- full strength where the two are the same signal, as
+            // bright as the single trace every other mode draws and with the
+            // right hidden underneath it, fading to the same `apart` as they
+            // come apart. So brightness is agreement, and a small deviation
+            // looks small instead of switching the whole trace to a ghost.
+            //
+            // The fade is linear up to `fullyApart`, roughly two pixels of
+            // separation at this display's scale -- below that the two traces
+            // are one line and splitting the ink would only dim it for no
+            // reading. It needs a stop per column: the gap turns over at the
+            // carrier's rate and not the sidechain's, because inside one half of
+            // the sub the lid holds one channel down at its peaks while both run
+            // free through the zero crossings. Coarser stops smear every bright
+            // stretch away and the whole trace sits at `apart`.
             constexpr auto apart = 0.3f;
-
-            // Roughly two pixels of separation at this display's scale. Closer
-            // than that and the two traces are one line, so splitting the ink
-            // between them would only dim it for no reading.
             constexpr auto fullyApart = 0.02f;
 
             const auto strokeOutput = [&] (float alpha)
             {
-                const auto lit = [] (float a) { return hccolour::output.withAlpha (a); };
                 const auto line = stroke (1.4f);
+                const auto lit = [alpha] (float a) { return hccolour::output.withAlpha (alpha * a); };
 
                 if (! wtf)
                 {
-                    g.setColour (lit (alpha));
+                    g.setColour (lit (1.0f));
                     g.strokePath (output, line);
                     return;
                 }
 
-                g.setColour (lit (alpha * apart));
+                g.setColour (lit (apart));
                 g.strokePath (outputR, line);
 
-                // How lit the left trace is over one column, from the widest gap
-                // between the two channels inside it -- widest rather than mean,
-                // so that a deviation cannot hide between two of the stops below.
+                // Widest gap inside the column rather than the mean, so that a
+                // deviation cannot hide between two stops.
                 const auto litAt = [&] (int column)
                 {
-                    const auto from = startIndex + count * column / columns;
-                    const auto to = juce::jmax (from + 1, startIndex + count * (column + 1) / columns);
-
+                    const auto [from, to] = columnRange (column);
                     auto widest = 0.0f;
 
                     for (auto i = from; i < to; ++i)
                         widest = juce::jmax (widest, std::abs (fifo.at (i).out - fifo.at (i).outR));
 
-                    return lit (alpha * juce::jmap (juce::jmin (widest, fullyApart),
-                                                    0.0f, fullyApart, 1.0f, apart));
+                    return lit (juce::jmap (juce::jmin (widest, fullyApart),
+                                            0.0f, fullyApart, 1.0f, apart));
                 };
 
-                // A stop per column, because the agreement turns over at the
-                // carrier's rate and not the sidechain's: inside one half of the
-                // sub the lid holds one channel down at its peaks while both run
-                // free through the zero crossings, so the trace brightens and
-                // dims within a single cycle.
                 juce::ColourGradient agreement { litAt (0), bounds.getX(), mid,
                                                  litAt (columns - 1), bounds.getRight(), mid, false };
 
@@ -1085,8 +1102,15 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 
     clipPill.outlined = true;
     clipPill.onTint = hccolour::clipOn;
-    clipPill.dimWhenOff = true;
     clipPill.overrideText = [] { return juce::String ("CLIP"); };
+
+    // Off, CLIP reads as a legend rather than a live value, so the design drops
+    // its text to the caption tone.
+    clipPill.textColour = [this]
+    {
+        return proc.apvts.getRawParameterValue (ids::clip)->load() > 0.5f ? hccolour::clipOn
+                                                                          : hccolour::label;
+    };
 
     filterCaption.hoverText = [this]
     {
@@ -1214,42 +1238,31 @@ void HardCapEditor::showSlopeMenu()
 {
     auto& slope = *proc.apvts.getParameter (ids::slope);
     const auto choices = slope.getAllValueStrings();
-    const auto current = juce::roundToInt (slope.getValue() * (float) (choices.size() - 1));
 
-    juce::PopupMenu menu;
-    menu.setLookAndFeel (&lookAndFeel);
-
-    for (int i = 0; i < choices.size(); ++i)
-        menu.addItem (i + 1, choices[i], true, i == current);
-
-    menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (&slopePill),
-                        [safe = juce::Component::SafePointer<HardCapEditor> (this)] (int choice)
-                        {
-                            if (choice <= 0 || safe == nullptr)
-                                return;
-
-                            safe->applySlope (choice - 1);
-                        });
+    showPillMenu (slopePill, choices,
+                  juce::roundToInt (slope.getValue() * (float) (choices.size() - 1)),
+                  [this] (int index) { applySlope (index); });
 }
 
 void HardCapEditor::showScaleMenu()
 {
-    juce::PopupMenu menu;
-    menu.setLookAndFeel (&lookAndFeel);
+    juce::StringArray items;
+    auto current = 0;
 
     for (int i = 0; i < (int) std::size (scaleSteps); ++i)
-        menu.addItem (i + 1, juce::String (juce::roundToInt (scaleSteps[i] * 100.0f)) + "%",
-                      true, juce::approximatelyEqual (scaleFactor, scaleSteps[i]));
+    {
+        items.add (juce::String (juce::roundToInt (scaleSteps[i] * 100.0f)) + "%");
 
-    menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (&settings.scale),
-                        [safe = juce::Component::SafePointer<HardCapEditor> (this)] (int choice)
-                        {
-                            if (choice <= 0 || safe == nullptr)
-                                return;
+        if (juce::approximatelyEqual (scaleFactor, scaleSteps[i]))
+            current = i;
+    }
 
-                            safe->setScale (scaleSteps[choice - 1]);
-                            safe->settings.scale.repaint();
-                        });
+    showPillMenu (settings.scale, items, current,
+                  [this] (int index)
+                  {
+                      setScale (scaleSteps[index]);
+                      settings.scale.repaint();
+                  });
 }
 
 void HardCapEditor::applySlope (int index)

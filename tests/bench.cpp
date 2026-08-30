@@ -2,6 +2,7 @@
 // Not a test -- not registered with CTest. Run it by hand.
 
 #include "../Source/PluginProcessor.h"
+#include "check.h" // for setChoice; this file makes no assertions of its own
 
 #include <chrono>
 #include <cstdio>
@@ -25,16 +26,6 @@ void fillNoise (juce::AudioBuffer<float>& b)
     for (int ch = 0; ch < b.getNumChannels(); ++ch)
         for (int i = 0; i < b.getNumSamples(); ++i)
             b.getWritePointer (ch)[i] = d (rng);
-}
-
-// Choice parameters take a normalised value, and the fraction that lands on a
-// given index moves whenever an option is added -- which is exactly how a
-// two-way switch grown to three silently redirects every existing call. Name
-// the index and let the parameter do the arithmetic.
-void setChoice (HardCapProcessor& p, const char* id, int index)
-{
-    auto* param = p.apvts.getParameter (id);
-    param->setValueNotifyingHost (param->convertTo0to1 ((float) index));
 }
 
 // % of one core needed to keep up with real time.
