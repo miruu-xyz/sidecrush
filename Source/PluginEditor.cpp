@@ -919,6 +919,7 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 
     addSlider (preSlider,    juce::Slider::LinearVertical,     ids::pre,      {}, true, preAtt);
     addSlider (outputSlider, juce::Slider::LinearVertical,     ids::output,   {}, true, outputAtt);
+    addSlider (mixSlider,    juce::Slider::LinearVertical,     ids::mix,      {}, true, mixAtt);
     addSlider (ceilingKnob,  juce::Slider::RotaryVerticalDrag, ids::ceiling,  hccolour::accent, true, ceilingAtt);
     addSlider (filterKnob,   juce::Slider::RotaryVerticalDrag, ids::filterHz, hccolour::accent, false, filterAtt);
     addSlider (shapeKnob,    juce::Slider::RotaryVerticalDrag, ids::shape,    hccolour::accent, false, shapeAtt);
@@ -1165,7 +1166,7 @@ void HardCapEditor::showSettings (bool shouldShow)
 
 void HardCapEditor::refreshFromParameters()
 {
-    for (auto* slider : { &preSlider, &outputSlider, &ceilingKnob, &filterKnob, &shapeKnob })
+    for (auto* slider : { &preSlider, &outputSlider, &mixSlider, &ceilingKnob, &filterKnob, &shapeKnob })
         slider->updateText();
 
     updateScopeOverlay();
@@ -1227,7 +1228,8 @@ void HardCapEditor::paint (juce::Graphics& g)
     g.setColour (hccolour::label);
     g.drawText ("PRE",     juce::Rectangle<int> {  48, 48, 42, 19 }, juce::Justification::centred);
     g.drawText ("CEILING", juce::Rectangle<int> { 164, 48, 77, 19 }, juce::Justification::centred);
-    g.drawText ("OUT",     juce::Rectangle<int> { 878, 48, 42, 19 }, juce::Justification::centred);
+    g.drawText ("MIX",     juce::Rectangle<int> { 878, 48, 42, 19 }, juce::Justification::centred);
+    g.drawText ("OUT",     juce::Rectangle<int> { 966, 48, 42, 19 }, juce::Justification::centred);
 }
 
 void HardCapEditor::resized()
@@ -1236,7 +1238,8 @@ void HardCapEditor::resized()
     // given HardCapLookAndFeel::knobMargin of padding on every side so their
     // drop shadow and the pointer's glow are not clipped by their own bounds.
     preSlider.setBounds    (  48,  83,  42, 192); // track 83..243, readout to 275
-    outputSlider.setBounds ( 878,  83,  42, 192);
+    mixSlider.setBounds    ( 878,  83,  42, 192);
+    outputSlider.setBounds ( 966,  83,  42, 192); // last in the chain, so outermost
 
     ceilingKnob.setBounds  ( 113,  69, 188, 206); // r 80 at (207,163)
     filterKnob.setBounds   ( 320,  66,  78,  78); // r 25 at (359,105)

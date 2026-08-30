@@ -296,7 +296,7 @@ class HardCapEditor final : public juce::AudioProcessorEditor,
 public:
     // The design's own canvas. Everything is laid out against these numbers and
     // the whole editor is scaled as one, so they never change.
-    static constexpr int designWidth = 968;
+    static constexpr int designWidth = 1056;
     static constexpr int designHeight = 326;
 
     explicit HardCapEditor (HardCapProcessor&);
@@ -326,8 +326,8 @@ private:
     HardCapProcessor& proc;
     HardCapLookAndFeel lookAndFeel;
 
-    juce::Slider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
-    std::unique_ptr<SliderAttachment> preAtt, outputAtt, ceilingAtt, filterAtt, shapeAtt;
+    juce::Slider preSlider, outputSlider, mixSlider, ceilingKnob, filterKnob, shapeKnob;
+    std::unique_ptr<SliderAttachment> preAtt, outputAtt, mixAtt, ceilingAtt, filterAtt, shapeAtt;
 
     Pill slopePill, floorPill, clipPill;
     DialCaption filterCaption, shapeCaption;

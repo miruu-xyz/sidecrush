@@ -193,7 +193,6 @@ private:
 struct Params
 {
     float preGain = 1.0f;      // linear
-    float outGain = 1.0f;      // linear
     float ceilingLin = 0.5f;   // linear amplitude
     float floorLin = 0.0f;     // linear amplitude, forced below ceilingLin
     float shape = 0.0f;        // -1 .. +1
@@ -290,7 +289,9 @@ public:
         const auto shaped = params.clip ? std::clamp (driven, -lid, lid)
                                         : driven * lid;
 
-        return shaped * params.outGain;
+        // OUTPUT is deliberately not here: it is the last thing in the chain,
+        // after MIX, so it has to scale the blend and not just the wet half.
+        return shaped;
     }
 
     float lastLid (int channel) const noexcept { return lids[(size_t) channel]; }

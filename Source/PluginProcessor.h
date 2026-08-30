@@ -17,6 +17,7 @@ namespace ids
     constexpr auto filterHz  = "filter";
     constexpr auto slope     = "slope";
     constexpr auto output    = "output";
+    constexpr auto mix       = "mix";
     constexpr auto clip      = "clip";
     constexpr auto filterPos = "filterpos";
     constexpr auto scLink    = "sclink";
@@ -143,13 +144,21 @@ private:
     struct Raw
     {
         std::atomic<float>* pre, *ceiling, *floorDb, *shape, *filterHz, *slope,
-                          *output, *clip, *filterPos, *scLink, *scSource, *hq;
+                          *output, *mix, *clip, *filterPos, *scLink, *scSource, *hq;
     };
 
     Raw raw {};
 
     hardcap::Engine engine;
     juce::AudioBuffer<float> detector;
+
+    // MIX. The dry side goes in before the oversampler writes over the main
+    // buffer and comes back delayed by exactly the latency the wet path reports
+    // -- otherwise the blend is a comb filter rather than a blend. The ramp is
+    // switched off in prepareToPlay: SPEC 2 wants every parameter applied as a
+    // block-rate step, and MIX is no exception.
+    static constexpr int maxWetLatency = 512;
+    juce::dsp::DryWetMixer<float> mixer { maxWetLatency };
 
     // sc and lid are known inside the oversampled loop, but the output only
     // exists after the downsampler, the pad and the duck -- so the frames are

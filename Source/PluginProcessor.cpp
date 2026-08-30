@@ -93,6 +93,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
         NormalisableRange<float> { -36.0f, 36.0f, 0.1f }, 0.0f,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (db)));
 
+    // Fully wet by default: this is a limiter first, and a parallel one only if
+    // someone asks for it.
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::mix, 1 }, "Mix",
+        NormalisableRange<float> { 0.0f, 100.0f, 1.0f }, 100.0f,
+        AudioParameterFloatAttributes{}.withStringFromValueFunction (
+            [] (float v, int) { return String (roundToInt (v)) + "%"; })));
+
     layout.add (std::make_unique<AudioParameterBool> (
         ParameterID { ids::clip, 1 }, "Clip", true));
 
@@ -126,7 +134,8 @@ HardCapProcessor::HardCapProcessor()
 
     raw = { get (ids::pre),       get (ids::ceiling),   get (ids::floorDb),
             get (ids::shape),     get (ids::filterHz),  get (ids::slope),
-            get (ids::output),    get (ids::clip),      get (ids::filterPos),
+            get (ids::output),    get (ids::mix),       get (ids::clip),
+            get (ids::filterPos),
             get (ids::scLink),    get (ids::scSource),  get (ids::hq) };
 }
 
@@ -183,6 +192,11 @@ void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     ecoPad.prepare (spec);
     ecoPad.reset();
 
+    jassert (hqLatency <= maxWetLatency);
+    mixer.prepare (spec);
+    mixer.setRampLength (juce::Seconds { 0.0 }); // resets, so it has to come first
+    mixer.setWetLatency ((float) hqLatency);
+
     // All of it, not just the gain: a hold left over from a switch that was
     // still in flight when the host re-prepared would duck the first few
     // milliseconds of the new configuration for no reason.
@@ -204,7 +218,6 @@ void HardCapProcessor::pullParameters()
 {
     hardcap::Params p;
     p.preGain = juce::Decibels::decibelsToGain (raw.pre->load());
-    p.outGain = juce::Decibels::decibelsToGain (raw.output->load());
     p.ceilingLin = juce::Decibels::decibelsToGain (raw.ceiling->load());
 
     const auto floorDb = raw.floorDb->load();
@@ -249,6 +262,10 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         return;
 
     pullParameters();
+
+    // Before the oversampler, which writes its result back over this same block.
+    mixer.pushDrySamples (juce::dsp::AudioBlock<const float> (main)
+                              .getSubBlock (0, (size_t) numSamples));
 
     // ---- HQ ---------------------------------------------------------------
     // The swap only happens once the duck has reached silence, and only on a
@@ -414,6 +431,18 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     switchGain = gainAfterBlock;
     switchHold = holdAfterBlock;
+
+    // MIX, then OUTPUT. The duck above is there to hide a splice in the
+    // processed path; the dry side has no splice to hide, so it is not ducked.
+    // OUTPUT comes last so it scales the blend rather than only the wet half --
+    // otherwise pulling MIX down would make the plugin louder by whatever OUT
+    // was trimming.
+    auto block = juce::dsp::AudioBlock<float> (main).getSubBlock (0, (size_t) numSamples);
+
+    mixer.setWetMixProportion (raw.mix->load() * 0.01f);
+    mixer.mixWetSamples (block);
+
+    main.applyGain (0, numSamples, juce::Decibels::decibelsToGain (raw.output->load()));
 
     // Now the trace really is what the host receives -- downsampled, padded and
     // ducked, all three of which happened above.

@@ -26,6 +26,7 @@ lid     = 1 - d
 CLIP on:   out = clamp(carrier * pre, -lid, +lid)
 CLIP off:  out = carrier * pre * lid
 
+out     = mix * out + (1 - mix) * dry   -- dry delayed by the reported latency
 out     = out * output
 ```
 
@@ -75,6 +76,7 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 | FILTER | float, Hz | 20 … 20000, then OFF | OFF | logarithmic; OFF is the top detent |
 | SLOPE | choice | 6/12/18/24/30/36/42/48 dB/oct | 12 | 1–8 poles, snapped |
 | OUTPUT | float, dB | −36 … +36 | 0 | same range as PRE, deliberately |
+| MIX | float, % | 0 … 100 | 100 | parallel blend; the dry side is latency-compensated |
 | CLIP | bool | off / on | **on** | on = clip ceiling, off = VCA multiply |
 | FILTER POS | choice | PRE / POST | PRE | rectifier order |
 | SC LINK | choice | MONO / STEREO | STEREO | sidechain detection only; output is always stereo |
@@ -87,9 +89,11 @@ Notes:
 - **FLOOR at minimum reads INSTANT, not OFF.** Nothing is switched off there — the lid starts moving the moment the sidechain does. Reading "OFF" next to a SHAPE dial invites the reading that the shaping is disabled.
 - **FLOOR is absolute, not relative to CEILING** — sweeping CEILING does not drag FLOOR with it. FLOOR is internally clamped to `min(floor, ceiling - 1 dB)` so the window can never invert. The preview shows the effective window, so the clamp is visible rather than silent.
 - **PRE and OUTPUT share a range** so the pair is not confusing to read.
+- **MIX is fully wet by default.** This is a limiter first and a parallel one only if asked. Two consequences are deliberate: below 100 % the ceiling is no longer hard, because the dry half is by definition unlimited; and the dry half is *not* ducked during an HQ switch, because the duck exists to hide a splice the dry path does not have.
+- **OUTPUT is the last thing in the chain, after MIX.** Trimming the wet half alone would mean pulling MIX down made the plugin louder by however much OUTPUT was cutting.
 - **CEILING turns conventionally**: clockwise = higher dBFS = gentler. Counter-clockwise lowers the ceiling.
 - 20 kHz is the top of the FILTER sweep because Nyquist at 48 kHz is 24 kHz. Above ~20 kHz the filter does nothing, so the top of the sweep *is* the off position.
-- **No parameter smoothing anywhere.** Not on the lid path, and — deliberately, unlike most plugins — not on PRE, OUTPUT, CEILING, FLOOR or SHAPE either. Every parameter is read once per block and applied as a step. The usual 10–20 ms ramp exists to hide zipper noise; here that noise is the point. A hard automation lane on PRE or CEILING should sound *yanked*, not eased, and the block-rate stepping is part of what makes a fast sweep sound like something breaking rather than something fading. Smoothing would sand off exactly the roughness this plugin exists to produce. The host's buffer size is the only knob that changes how coarse the steps are, and that is the user's call.
+- **No parameter smoothing anywhere.** Not on the lid path, and — deliberately, unlike most plugins — not on PRE, OUTPUT, MIX, CEILING, FLOOR or SHAPE either. Every parameter is read once per block and applied as a step. The usual 10–20 ms ramp exists to hide zipper noise; here that noise is the point. A hard automation lane on PRE or CEILING should sound *yanked*, not eased, and the block-rate stepping is part of what makes a fast sweep sound like something breaking rather than something fading. Smoothing would sand off exactly the roughness this plugin exists to produce. The host's buffer size is the only knob that changes how coarse the steps are, and that is the user's call.
 
 ---
 
@@ -107,7 +111,7 @@ Notes:
                         │                            : x * lid         │
                         └──────────────────┬───────────────────────────┘
                                            v
-                                        OUTPUT ──> main out
+ main in ──> delay(latency) ─────────────> MIX ──> OUTPUT ──> main out
 ```
 
 Sidechain source and link happen at base rate; everything from the filter onward runs oversampled — 8x with HQ on, 4x with it off.
