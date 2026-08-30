@@ -81,7 +81,7 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 | MIX | float, % | 0 … 100 | 100 | parallel blend; the dry side is latency-compensated |
 | CLIP | bool | off / on | **on** | on = clip ceiling, off = VCA multiply |
 | FILTER POS | choice | PRE / POST | PRE | rectifier order |
-| SC LINK | choice | MONO / WTF / STEREO | STEREO | sidechain detection only; output is always stereo (see 4.5) |
+| SC LINK | choice | STEREO / MONO / WTF | STEREO | sidechain detection only; output is always stereo (see 4.5) |
 | SC SOURCE | choice | EXT / INT | EXT | INT = main input drives its own lid |
 | QUALITY | choice | HQ / LQ / YUCK | **HQ** | 8x linear phase / 4x minimum phase / 1x unfiltered (see 4.1) |
 
@@ -107,7 +107,7 @@ Notes:
  main in ──> PRE ───────┼──────────────────────────┐                   │
                         │                          │                   │
  sc source ──> link ────┼──> filter ──> rectify ──> t ──> d = t^p ──> lid
-   EXT | INT  MONO|ST|  │   (PRE/POST order)                 │         │
+   EXT | INT  ST|MONO|  │   (PRE/POST order)                 │         │
               WTF       │                                    │         │
                         │                                    v         │
                         │                       CLIP ? clamp(x, ±lid)  │
@@ -180,7 +180,7 @@ Cascaded **TPT state-variable** sections, Butterworth-aligned, one 1-pole sectio
 
 ### 4.5 The WTF link
 
-A third position on SC LINK, not a control of its own — it is one more way for the detector's two channels to relate to each other, which is exactly what that selector already chooses.
+The last position on SC LINK, not a control of its own — it is one more way for the detector's two channels to relate to each other, which is exactly what that selector already chooses.
 
 It **sums** the sidechain the way MONO does, then splits the sum by sign and gives one half to each channel: the positive excursions close the left lid, the negative ones close the right. Fed a low sine the two lids alternate at the sidechain's own rate, so the carrier appears to pan — a panning that comes from two clippers taking turns, not from any gain law.
 
@@ -228,9 +228,11 @@ Controls: PRE fader, CEILING dial (large), FILTER dial, SHAPE dial, SLOPE pill,
 FLOOR pill, OUT fader, a CLIP toggle in the scope's lower-right corner, and a
 gear in the upper-right that swaps the scope for a settings panel carrying
 STEREO / HQ / FILTER PRE / SIGNAL EXT, and SCALE below them. The first two are
-three-way: STEREO cycles MONO / WTF / STEREO and HQ cycles HQ / LQ / YUCK.
-WTF follows MONO because it is built out of MONO — it sums the sidechain the
-same way — and STEREO, which shares nothing with either, is the far end.
+three-way: STEREO cycles STEREO / MONO / WTF and HQ cycles HQ / LQ / YUCK.
+The link cycles away from its default into the ordinary alternative first —
+one click from STEREO is MONO, and WTF is past it. That also leaves the far
+end of the switch open: a second WTF engine would be another entry after this
+one rather than a renumbering of everything before it.
 
 **Right-clicking any pill backed by a list of choices opens that list as a
 menu**, so a three-way switch does not have to be cycled to find out what it

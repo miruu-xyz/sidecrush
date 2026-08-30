@@ -131,12 +131,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     // WTF sums like MONO and then splits the sum by sign, one half per channel --
     // SPEC 4.5. It is a stereo mode in the sense that the two channels stop
-    // agreeing, which is the whole point of it. It follows MONO because that is
-    // what it is built out of; STEREO, which shares nothing with either, is the
-    // far end of the switch.
+    // agreeing, which is the whole point of it. Last, because the cycle starts
+    // at STEREO and the ordinary alternative should be the first click; see the
+    // sclink namespace for the rest of why.
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::scLink, 1 }, "Sidechain Link",
-        StringArray { "MONO", "WTF", "STEREO" }, sclink::stereo));
+        StringArray { "STEREO", "MONO", "WTF" }, sclink::stereo));
 
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::scSource, 1 }, "Sidechain Source",

@@ -32,14 +32,18 @@ constexpr float filterOffHz = 20000.0f;
 constexpr float floorOffDb = -60.0f;
 
 // SC LINK is one three-way switch, not two: WTF is a third way of relating the
-// detector's two channels, and it is a variation on the *sum* -- it sums exactly
-// as MONO does -- so it sits next to MONO rather than beyond STEREO. Both files
-// index this parameter, and so do the tests.
+// detector's two channels, which is what this selector already chooses between.
+// The order is the order the pill cycles in -- STEREO, the default, steps first
+// to MONO and only then to WTF, so the ordinary linking choice is one click away
+// and the strange one is past it. That also leaves the far end open: a second
+// WTF engine would be another entry after this one rather than a renumbering of
+// everything before it. Both source files index this parameter, and so do the
+// tests.
 namespace sclink
 {
-    constexpr int mono = 0;
-    constexpr int wtf = 1;
-    constexpr int stereo = 2;
+    constexpr int stereo = 0;
+    constexpr int mono = 1;
+    constexpr int wtf = 2;
 }
 
 //==============================================================================
