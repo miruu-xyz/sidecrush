@@ -41,13 +41,15 @@ Full details, including everything deliberately left out, are in [SPEC.md](SPEC.
 | **OUTPUT** | Output gain. |
 | **CLIP** | Clip ceiling, or plain VCA ducking. |
 | **FILTER PRE/POST** | Rectifier order. POST turns the detector into an envelope follower. |
-| **MONO/STEREO** | Sidechain detection linking. The output is always stereo. |
+| **STEREO/MONO/WTF** | Sidechain detection linking. The output is always stereo. |
 | **EXT/INT** | External sidechain bus, or the main input driving its own lid. |
-| **HQ** | Oversampling quality. On: 8×, linear phase. Off: 4×, minimum phase, for about a third of the CPU. |
+| **HQ/LQ/YUCK** | Oversampling quality: 8× linear phase, 4× minimum phase, or none at all. |
 
 By default everything runs at 8× oversampling: a hard clip whose threshold moves every sample is about the most alias-prone thing you can build. Both paths need it — the clipper loses roughly 9 dB of alias floor per halving, and the detector cannot be run slower and interpolated up, because the interpolation's images land exactly on the decimator's fold points.
 
-**HQ** off drops both paths to 4× minimum phase when you would rather have the CPU back: measured at about a third the cost, for an alias floor of −60 dB instead of −69 dB. Toggling it never changes the reported latency — the cheaper path is padded back out to match, so no host is asked to renegotiate delay compensation mid-session — and the swap is ducked over a few milliseconds, because linear phase and minimum phase do not line up and the seam would otherwise click.
+**LQ** drops both paths to 4× minimum phase when you would rather have the CPU back: measured at about a third the cost, for an alias floor of −60 dB instead of −69 dB. **YUCK** goes further and turns oversampling off entirely — 1×, no anti-imaging filter of any kind, a tenth of HQ's CPU and a −32 dB alias floor. That is not a saving, it is the point: the moving clip folds its own harmonics back down the spectrum and you hear it. Changing quality never moves the reported latency — the cheaper paths are padded back out to match, so no host is asked to renegotiate delay compensation mid-session — and the swap is ducked over a few milliseconds, because none of the three cascades line up and the seam would otherwise click.
+
+**WTF** is the third position on the sidechain link. It sums the sidechain like MONO, then splits the sum by sign and hands one half to each channel: the modulator's positive peaks clip only the left, its negative peaks only the right. On a low sub the two clippers take turns and the carrier appears to pan. In POST the split happens before the filter, so each side gets its own envelope and the pan survives the smoothing. The scope shows it: the aperture's top edge is the left lid and its bottom edge the right, and the output is drawn once per channel — full brightness where the two channels agree, both fading back to 30% where the clippers are taking turns.
 
 ## Building
 
@@ -76,7 +78,7 @@ On macOS, building without full Xcode works — Command Line Tools are enough fo
 Two, both plain executables with no framework:
 
 - `hardcap_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
-- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the three things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that toggling HQ does not move the reported latency, and that the HQ swap does not click.
+- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the four things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that WTF actually drives the two channels apart, that changing quality does not move the reported latency, and that the swap does not click.
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
 
@@ -90,10 +92,10 @@ cmake --build build --target hardcap_bench hardcap_alias
 
 They land next to the tests, in `build/hardcap_bench_artefacts/<config>/` and `build/hardcap_alias_artefacts/<config>/`.
 
-- `hardcap_bench` — where the CPU goes. Cost per block size and sample rate, HQ on versus off, each sidechain routing, the cost of each oversampler and of the engine loop on its own, and how far the output steps when HQ is toggled mid-signal.
+- `hardcap_bench` — where the CPU goes. Cost per block size and sample rate, each quality mode, each sidechain routing, the cost of each oversampler and of the engine loop on its own, and how far the output steps when quality is changed mid-signal.
 - `hardcap_alias` — what the oversampling buys. Alias floor per factor for the clipper and for the detector, FIR against IIR, and how far the finished output moves if the detector's upsampler is swapped for a cheaper one.
 
-Between them they are the evidence for why both paths sit at 8×, why the detector cannot simply run slower, and what HQ costs. The constants in `PluginProcessor.h` quote their figures, so if you change the DSP, re-run them and update the comments.
+Between them they are the evidence for why both paths sit at 8×, why the detector cannot simply run slower, and what each quality mode costs. The constants in `PluginProcessor.h` quote their figures, so if you change the DSP, re-run them and update the comments.
 
 ### Looking at the GUI
 
@@ -129,7 +131,7 @@ A newer push cancels an in-flight run for the same ref. Tags are exempt.
 
 The DSP is complete and matches the spec, and the interface now implements the Figma design — layout, typeface, dial and fader artwork, the recessed wells, the glows, the oscilloscope overlays, and the hover and engaged states from the file's component variants. See [SPEC §5](SPEC.md) for what was taken from where.
 
-**HQ** has a control now: the gear in the scope's upper-right swaps in the settings panel, where HQ sits alongside STEREO, FILTER PRE/POST and SIGNAL EXT — matching the Oscilloscope "Variant3" component rather than a popup, because the file has no popup designed anywhere.
+**QUALITY** has a control: the gear in the scope's upper-right swaps in the settings panel, where it sits alongside the sidechain link, FILTER PRE/POST and SIGNAL EXT — matching the Oscilloscope "Variant3" component rather than a popup, because the file has no popup designed anywhere. Both it and the link pill are three-way cycles.
 
 The scope's overlays are state-driven rather than always on — see [SPEC §5.3](SPEC.md) for which control summons which.
 

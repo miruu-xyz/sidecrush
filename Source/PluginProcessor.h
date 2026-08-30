@@ -22,7 +22,7 @@ namespace ids
     constexpr auto filterPos = "filterpos";
     constexpr auto scLink    = "sclink";
     constexpr auto scSource  = "scsource";
-    constexpr auto hq        = "hq";
+    constexpr auto quality   = "quality";
 }
 
 // The top of the filter's range and the bottom of the floor's both mean "off"
@@ -31,12 +31,29 @@ namespace ids
 constexpr float filterOffHz = 20000.0f;
 constexpr float floorOffDb = -60.0f;
 
+// SC LINK is one three-way switch, not two: WTF is a third way of relating the
+// detector's two channels, which is what this selector already chooses between.
+// The order is the order the pill cycles in -- STEREO, the default, steps first
+// to MONO and only then to WTF, so the ordinary linking choice is one click away
+// and the strange one is past it. That also leaves the far end open: a second
+// WTF engine would be another entry after this one rather than a renumbering of
+// everything before it. Both source files index this parameter, and so do the
+// tests.
+namespace sclink
+{
+    constexpr int stereo = 0;
+    constexpr int mono = 1;
+    constexpr int wtf = 2;
+}
+
 //==============================================================================
 struct ScopeFrame
 {
-    float sc = 0.0f;   // filtered sidechain, the signal the thresholds measure
-    float lid = 1.0f;  // 0 = fully shut, 1 = wide open
-    float out = 0.0f;
+    float sc = 0.0f;    // filtered sidechain, the signal the thresholds measure
+    float lid = 1.0f;   // left lid. 0 = fully shut, 1 = wide open
+    float out = 0.0f;   // left output
+    float lidR = 1.0f;  // the right channel's pair. Identical to the left in
+    float outR = 0.0f;  // every mode but WTF, which is the one that draws them
 };
 
 // Single producer (audio thread), single consumer (editor timer). The consumer
@@ -117,7 +134,8 @@ public:
     std::atomic<float> gainReduction { 0.0f }; // 0 = lid open, 1 = fully shut
 
 private:
-    // Both paths run at 8x, and tests/alias.cpp says both need to.
+    // Three quality modes, in the order the parameter lists them. Both paths run
+    // at the same factor in all three, and tests/alias.cpp says they need to.
     //
     // Carrier: the hard clipper's alias floor is -32 dB at 1x, -48 at 2x, -60 at
     // 4x, -69 at 8x. Every halving costs about 9 dB.
@@ -127,15 +145,21 @@ private:
     // It is not -- the interpolation's images land on the decimator's fold
     // points, and 2x + interpolation measures -53 dB against 8x's -85 dB. The
     // lid has to be computed at the rate it is used at.
-    static constexpr int hqFactorLog2 = 3; // 8x -- SPEC 4.1
-    static constexpr int hqFactor = 1 << hqFactorLog2;
+    //
+    // HQ  8x linear phase FIR      -69 dB   -- SPEC 4.1
+    // LQ  4x minimum phase IIR     -60 dB, about a third of the CPU. The
+    //     polyphase IIR is both cheaper and slightly cleaner than the FIR at the
+    //     same factor; what it costs is linear phase, a fair thing to spend here.
+    // YUCK 1x, factor 0            -32 dB. JUCE's pass-through stage: not a
+    //     cheaper anti-imaging filter but no filter at all, so neither phase
+    //     response applies and the aliasing is the effect.
+    static constexpr int numQualities = 3;
+    static constexpr int qualityLog2[numQualities] { 3, 2, 0 };
 
-    // HQ off: 4x, and minimum phase instead of linear. Measured -60 dB of alias
-    // floor against HQ's -69 dB, for about a third of the CPU. The polyphase IIR
-    // is both cheaper and slightly cleaner than the FIR at the same factor; what
-    // it costs is linear phase, which is a fair thing to spend in an eco mode.
-    static constexpr int ecoFactorLog2 = 2; // 4x
-    static constexpr int ecoFactor = 1 << ecoFactorLog2;
+    static constexpr int factorFor (int quality) noexcept
+    {
+        return 1 << qualityLog2[quality];
+    }
 
     void pullParameters();
 
@@ -144,7 +168,7 @@ private:
     struct Raw
     {
         std::atomic<float>* pre, *ceiling, *floorDb, *shape, *filterHz, *slope,
-                          *output, *mix, *clip, *filterPos, *scLink, *scSource, *hq;
+                          *output, *mix, *clip, *filterPos, *scLink, *scSource, *quality;
     };
 
     Raw raw {};
@@ -165,21 +189,20 @@ private:
     // staged here and pushed once all three have run.
     std::vector<ScopeFrame> pendingScope;
 
-    // Both configurations are built up front so that toggling HQ never allocates
-    // on the audio thread.
-    std::unique_ptr<juce::dsp::Oversampling<float>> carrierOsHq, detectorOsHq,
-                                                    carrierOsEco, detectorOsEco;
+    // Every configuration is built up front so that changing quality never
+    // allocates on the audio thread.
+    std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, numQualities> carrierOs, detectorOs;
 
-    // Eco's oversamplers are shorter than HQ's, so the output is padded back out
-    // to the same total. Reported latency then never changes and the host is
+    // The cheaper cascades are shorter than HQ's, so their output is padded back
+    // out to the same total. Reported latency then never changes and the host is
     // never asked to renegotiate PDC just because someone hit the button.
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> ecoPad { 512 };
-    int ecoPadSamples = 0;
-    bool lastHq = true;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> latencyPad { maxWetLatency };
+    std::array<int, numQualities> padSamples {};
+    int lastQuality = 0;
     double baseSampleRate = 44100.0;
 
-    // Linear phase and minimum phase do not line up, so swapping cascades steps
-    // the output no matter how carefully the new one is primed. Duck across the
+    // No two of the three cascades line up, so swapping one for another steps the
+    // output no matter how carefully the new one is primed. Duck across the
     // change instead: cheaper than running both paths for a block, and a short
     // dip is far less objectionable than a click.
     float switchGain = 1.0f;

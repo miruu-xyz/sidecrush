@@ -3,6 +3,36 @@
 #include <BinaryData.h>
 
 #include <limits>
+#include <utility>
+
+namespace
+{
+    // The UI scales the editor offers, in the order the switch cycles them.
+    constexpr float scaleSteps[] { 0.75f, 1.0f, 1.25f, 1.5f };
+
+    // Every menu here is the same shape: a list, a tick on the current entry,
+    // and an index handed back. `target` is what the menu hangs off and what
+    // keeps it honest -- the callback is dropped if that component has gone,
+    // which is also what makes it safe for the callback to touch the editor the
+    // pill belongs to.
+    void showPillMenu (juce::Component& target, const juce::StringArray& items, int current,
+                       std::function<void (int)> chosen)
+    {
+        juce::PopupMenu menu;
+        menu.setLookAndFeel (&target.getLookAndFeel());
+
+        for (int i = 0; i < items.size(); ++i)
+            menu.addItem (i + 1, items[i], true, i == current);
+
+        menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (&target),
+                            [safe = juce::Component::SafePointer<juce::Component> (&target),
+                             pick = std::move (chosen)] (int choice)
+                            {
+                                if (choice > 0 && safe != nullptr)
+                                    pick (choice - 1);
+                            });
+    }
+}
 
 //==============================================================================
 juce::Font hcFont (float pointHeight)
@@ -90,7 +120,11 @@ juce::Slider::SliderLayout HardCapLookAndFeel::getSliderLayout (juce::Slider& sl
     const auto sliderHeight = slider.isRotary() ? bounds.getWidth()
                                                 : bounds.getHeight() - 32;
 
-    layout.sliderBounds = bounds.withHeight (sliderHeight);
+    // A fader's cap overhangs the ends of its track by half its height, so the
+    // travel has to stop 6px short of the component or the cap clips at the top
+    // of the stroke at maximum (and at the bottom at minimum).
+    layout.sliderBounds = bounds.withHeight (sliderHeight)
+                                .reduced (0, slider.isRotary() ? 0 : 6);
     layout.textBoxBounds = bounds.withTop (sliderHeight);
     return layout;
 }
@@ -195,7 +229,6 @@ void Pill::paint (juce::Graphics& g)
     const auto r = getLocalBounds().toFloat().reduced (0.5f);
     const auto on = param != nullptr && param->getValue() > 0.5f;
     const auto engaged = on && onTint.isOpaque();
-    const auto dormant = dimWhenOff && ! on;
 
     if (engaged)
     {
@@ -233,15 +266,13 @@ void Pill::paint (juce::Graphics& g)
     drawLabel (g, overrideText != nullptr ? overrideText()
                                           : param != nullptr ? param->getCurrentValueAsText()
                                                              : juce::String(),
-               engaged, dormant);
+               textColour != nullptr ? textColour() : hccolour::value);
 }
 
-void Pill::drawLabel (juce::Graphics& g, juce::String text, bool engaged, bool dormant)
+void Pill::drawLabel (juce::Graphics& g, juce::String text, juce::Colour bright)
 {
     const auto font = hcFont (12.0f);
     g.setFont (font);
-
-    const auto bright = engaged ? hccolour::clipOn : dormant ? hccolour::label : hccolour::value;
 
     if (prefix.isEmpty())
     {
@@ -267,11 +298,37 @@ void Pill::drawLabel (juce::Graphics& g, juce::String text, bool engaged, bool d
                 juce::Justification::centredLeft);
 }
 
+void Pill::showChoiceMenu()
+{
+    // Empty unless the parameter really is a list: JUCE only builds the value
+    // strings for a discrete one, so a continuous parameter is never asked to
+    // name its hundreds of steps.
+    const auto choices = param != nullptr ? param->getAllValueStrings() : juce::StringArray {};
+
+    if (choices.size() < 2)
+        return;
+
+    const auto last = choices.size() - 1;
+
+    showPillMenu (*this, choices, juce::roundToInt (param->getValue() * (float) last),
+                  [this, last] (int index)
+                  {
+                      attachment->setValueAsCompleteGesture (
+                          param->convertFrom0to1 ((float) index / (float) last));
+                  });
+}
+
 void Pill::mouseEnter (const juce::MouseEvent&) { hovered = true;  repaint(); }
 void Pill::mouseExit  (const juce::MouseEvent&) { hovered = false; repaint(); }
 
-void Pill::mouseDown (const juce::MouseEvent&)
+void Pill::mouseDown (const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu())
+    {
+        onRightClick != nullptr ? onRightClick() : showChoiceMenu();
+        return;
+    }
+
     if (gesture != Gesture::drag)
         return;
 
@@ -316,7 +373,13 @@ void Pill::mouseUp (const juce::MouseEvent& e)
     // A click is a press and release that moved nothing, so it can still mean
     // something on a pill that also drags -- that is how the slope selector both
     // sweeps the filter and opens its menu.
-    if (! e.mouseWasClicked())
+    //
+    // Right-clicks are not clicks in that sense: mouseDown already gave one to
+    // the menu and returned, but the release still arrives here, and acting on
+    // it too would open the list and step past the value in one gesture. The
+    // modifiers on a mouse-up are the ones from before the button came up, so
+    // the right button is still set here.
+    if (! e.mouseWasClicked() || e.mods.isPopupMenu())
         return;
 
     if (onClick != nullptr)
@@ -607,6 +670,12 @@ void ScopeComponent::paint (juce::Graphics& g)
     const auto centreX = bounds.getCentreX();
     const auto post = processor.apvts.getRawParameterValue (ids::filterPos)->load() > 0.5f;
 
+    // In WTF the two channels stop agreeing -- SPEC 4.5 -- and the display says
+    // so: the top of the aperture is the left lid, the bottom is the right, and
+    // the output is drawn once per channel at half opacity so the two traces
+    // read as one line while they agree and visibly part when they do not.
+    const auto wtf = (int) processor.apvts.getRawParameterValue (ids::scLink)->load() == sclink::wtf;
+
     // Both sidechain gradients run the full +/-1 amplitude span, so their stops
     // can be placed at the ceiling and the floor and stay there as those move.
     // Figma builds these by hand and its annotation asks for "the easiest
@@ -691,6 +760,17 @@ void ScopeComponent::paint (juce::Graphics& g)
             const auto firstX = bounds.getX() + 0.5f;
             const auto lastX = bounds.getX() + (float) (columns - 1) + 0.5f;
 
+            // Which samples land in one pixel column. The WTF brightness below
+            // walks the same ranges, so this is defined once rather than twice
+            // -- two copies could disagree about where a column ends and the
+            // gradient would then be lit a column out from the trace it tints.
+            const auto columnRange = [&] (int column)
+            {
+                const auto from = startIndex + count * column / columns;
+                return std::pair { from, juce::jmax (from + 1,
+                                                     startIndex + count * (column + 1) / columns) };
+            };
+
             const auto buildTrace = [&] (auto value)
             {
                 juce::Path path;
@@ -703,8 +783,7 @@ void ScopeComponent::paint (juce::Graphics& g)
 
                 for (int column = 0; column < columns; ++column)
                 {
-                    const auto from = startIndex + count * column / columns;
-                    const auto to = juce::jmax (from + 1, startIndex + count * (column + 1) / columns);
+                    const auto [from, to] = columnRange (column);
 
                     auto low = std::numeric_limits<float>::max();
                     auto high = std::numeric_limits<float>::lowest();
@@ -759,6 +838,67 @@ void ScopeComponent::paint (juce::Graphics& g)
 
             const auto sidechain = buildTrace ([] (const ScopeFrame& f) { return f.sc; });
             const auto output = buildTrace ([] (const ScopeFrame& f) { return f.out; });
+            const auto outputR = wtf ? buildTrace ([] (const ScopeFrame& f) { return f.outR; })
+                                     : juce::Path {};
+
+            // WTF draws one output per channel, and the two together have to
+            // read as one line where the channels agree and as two where they do
+            // not. The right sits at `apart` throughout; the left carries the
+            // reading -- full strength where the two are the same signal, as
+            // bright as the single trace every other mode draws and with the
+            // right hidden underneath it, fading to the same `apart` as they
+            // come apart. So brightness is agreement, and a small deviation
+            // looks small instead of switching the whole trace to a ghost.
+            //
+            // The fade is linear up to `fullyApart`, roughly two pixels of
+            // separation at this display's scale -- below that the two traces
+            // are one line and splitting the ink would only dim it for no
+            // reading. It needs a stop per column: the gap turns over at the
+            // carrier's rate and not the sidechain's, because inside one half of
+            // the sub the lid holds one channel down at its peaks while both run
+            // free through the zero crossings. Coarser stops smear every bright
+            // stretch away and the whole trace sits at `apart`.
+            constexpr auto apart = 0.3f;
+            constexpr auto fullyApart = 0.02f;
+
+            const auto strokeOutput = [&] (float alpha)
+            {
+                const auto line = stroke (1.4f);
+                const auto lit = [alpha] (float a) { return hccolour::output.withAlpha (alpha * a); };
+
+                if (! wtf)
+                {
+                    g.setColour (lit (1.0f));
+                    g.strokePath (output, line);
+                    return;
+                }
+
+                g.setColour (lit (apart));
+                g.strokePath (outputR, line);
+
+                // Widest gap inside the column rather than the mean, so that a
+                // deviation cannot hide between two stops.
+                const auto litAt = [&] (int column)
+                {
+                    const auto [from, to] = columnRange (column);
+                    auto widest = 0.0f;
+
+                    for (auto i = from; i < to; ++i)
+                        widest = juce::jmax (widest, std::abs (fifo.at (i).out - fifo.at (i).outR));
+
+                    return lit (juce::jmap (juce::jmin (widest, fullyApart),
+                                            0.0f, fullyApart, 1.0f, apart));
+                };
+
+                juce::ColourGradient agreement { litAt (0), bounds.getX(), mid,
+                                                 litAt (columns - 1), bounds.getRight(), mid, false };
+
+                for (int column = 1; column < columns - 1; ++column)
+                    agreement.addColour ((double) column / (double) (columns - 1), litAt (column));
+
+                g.setGradientFill (agreement);
+                g.strokePath (output, line);
+            };
 
             // In POST the detector is a rectified envelope, and drawn literally
             // it is a half-wave sitting on the centre line -- which reads as a
@@ -800,8 +940,7 @@ void ScopeComponent::paint (juce::Graphics& g)
                 g.strokePath (sidechain, stroke (1.6f));
                 g.strokePath (mirrored, stroke (1.6f));
 
-                g.setColour (hccolour::output.withAlpha (0.1f));
-                g.strokePath (output, stroke (1.4f));
+                strokeOutput (0.1f);
             }
             else
             {
@@ -819,11 +958,11 @@ void ScopeComponent::paint (juce::Graphics& g)
 
                 g.setGradientFill ({ juce::Colours::white.withAlpha (0.08f), centreX, mid,
                                      juce::Colours::white.withAlpha (0.0f), centreX, bounds.getBottom(), false });
-                g.fillPath (closeOnto (buildTrace ([] (const ScopeFrame& f) { return -f.lid; }),
+                g.fillPath (closeOnto (buildTrace ([wtf] (const ScopeFrame& f)
+                                                   { return -(wtf ? f.lidR : f.lid); }),
                                        bounds.getBottom()));
 
-                g.setColour (hccolour::output);
-                g.strokePath (output, stroke (1.4f));
+                strokeOutput (1.0f);
             }
         }
     }
@@ -858,19 +997,27 @@ void ScopeComponent::paint (juce::Graphics& g)
 SettingsPanel::SettingsPanel (HardCapProcessor& p)
     : scale ("SCALE"),
       link (p, ids::scLink, Pill::Gesture::cycle),
-      hq (p, ids::hq, Pill::Gesture::cycle),
+      quality (p, ids::quality, Pill::Gesture::cycle),
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
       source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL")
 {
-    // AudioParameterBool reads out as "On"/"Off"; the design names the modes,
-    // and draws the lesser one dimmed so the pair is readable at a glance.
-    hq.overrideText = [&p] { return p.apvts.getRawParameterValue (ids::hq)->load() > 0.5f
-                                        ? juce::String ("HQ") : juce::String ("LQ"); };
-    hq.dimWhenOff = true;
+    // The choice names itself, so nothing has to override the text. What the
+    // design does say is that the three states are not equals: HQ is the live
+    // value, LQ is dimmed to the caption tone so the pair reads as one switch,
+    // and YUCK gets its own amber -- a warning, not a reading.
+    quality.textColour = [&p]
+    {
+        switch ((int) p.apvts.getRawParameterValue (ids::quality)->load())
+        {
+            case 1:  return hccolour::label;
+            case 2:  return hccolour::yuck;
+            default: return hccolour::value;
+        }
+    };
 
     scale.setComponentID ("scale");
 
-    for (auto* pill : { &link, &hq, &filterPos, &source, &scale })
+    for (auto* pill : { &link, &quality, &filterPos, &source, &scale })
         addAndMakeVisible (pill);
 }
 
@@ -899,7 +1046,7 @@ void SettingsPanel::resized()
 
     // Two rows of routing, then the scale on its own below a wider gap -- it is
     // the one switch here that changes nothing about the audio.
-    row (link, 80, &hq, 43, centreY - 43);
+    row (link, 80, &quality, 43, centreY - 43);
     row (filterPos, 101, &source, 107, centreY - 14);
     row (scale, 105, nullptr, 0, centreY + 23);
 }
@@ -955,8 +1102,15 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 
     clipPill.outlined = true;
     clipPill.onTint = hccolour::clipOn;
-    clipPill.dimWhenOff = true;
     clipPill.overrideText = [] { return juce::String ("CLIP"); };
+
+    // Off, CLIP reads as a legend rather than a live value, so the design drops
+    // its text to the caption tone.
+    clipPill.textColour = [this]
+    {
+        return proc.apvts.getRawParameterValue (ids::clip)->load() > 0.5f ? hccolour::clipOn
+                                                                          : hccolour::label;
+    };
 
     filterCaption.hoverText = [this]
     {
@@ -1029,16 +1183,21 @@ HardCapEditor::HardCapEditor (HardCapProcessor& p)
 
     settings.scale.onClick = [this]
     {
-        static constexpr float steps[] { 0.75f, 1.0f, 1.25f, 1.5f };
         auto index = 0;
 
-        for (int i = 0; i < (int) std::size (steps); ++i)
-            if (juce::approximatelyEqual (scaleFactor, steps[i]))
+        for (int i = 0; i < (int) std::size (scaleSteps); ++i)
+            if (juce::approximatelyEqual (scaleFactor, scaleSteps[i]))
                 index = i;
 
-        setScale (steps[(index + 1) % (int) std::size (steps)]);
+        setScale (scaleSteps[(index + 1) % (int) std::size (scaleSteps)]);
         settings.scale.repaint();
     };
+
+    // Right-click lists the choices -- see Pill::showChoiceMenu. These two are
+    // the pills that need more than the parameter can say: SLOPE's menu also
+    // brings the filter in, and SCALE has no parameter at all.
+    slopePill.onRightClick = [this] { showSlopeMenu(); };
+    settings.scale.onRightClick = [this] { showScaleMenu(); };
 
     // The scope is only ever one of the two, at the same bounds, so the panel is
     // a swap rather than an overlay -- that is how the Figma variant reads.
@@ -1079,22 +1238,31 @@ void HardCapEditor::showSlopeMenu()
 {
     auto& slope = *proc.apvts.getParameter (ids::slope);
     const auto choices = slope.getAllValueStrings();
-    const auto current = juce::roundToInt (slope.getValue() * (float) (choices.size() - 1));
 
-    juce::PopupMenu menu;
-    menu.setLookAndFeel (&lookAndFeel);
+    showPillMenu (slopePill, choices,
+                  juce::roundToInt (slope.getValue() * (float) (choices.size() - 1)),
+                  [this] (int index) { applySlope (index); });
+}
 
-    for (int i = 0; i < choices.size(); ++i)
-        menu.addItem (i + 1, choices[i], true, i == current);
+void HardCapEditor::showScaleMenu()
+{
+    juce::StringArray items;
+    auto current = 0;
 
-    menu.showMenuAsync (juce::PopupMenu::Options {}.withTargetComponent (&slopePill),
-                        [safe = juce::Component::SafePointer<HardCapEditor> (this)] (int choice)
-                        {
-                            if (choice <= 0 || safe == nullptr)
-                                return;
+    for (int i = 0; i < (int) std::size (scaleSteps); ++i)
+    {
+        items.add (juce::String (juce::roundToInt (scaleSteps[i] * 100.0f)) + "%");
 
-                            safe->applySlope (choice - 1);
-                        });
+        if (juce::approximatelyEqual (scaleFactor, scaleSteps[i]))
+            current = i;
+    }
+
+    showPillMenu (settings.scale, items, current,
+                  [this] (int index)
+                  {
+                      setScale (scaleSteps[index]);
+                      settings.scale.repaint();
+                  });
 }
 
 void HardCapEditor::applySlope (int index)
@@ -1191,6 +1359,15 @@ void HardCapEditor::timerCallback()
         lastFilterPost = post;
         proc.filterIsPost.store (post, std::memory_order_relaxed);
         filterKnob.updateText();
+    }
+
+    // The FLOOR readout brackets its value while the ceiling is holding it down,
+    // so the ceiling moving is what repaints it -- nothing else would.
+    if (const auto ceiling = proc.apvts.getRawParameterValue (ids::ceiling)->load();
+        ! juce::approximatelyEqual (ceiling, lastCeilingDb))
+    {
+        lastCeilingDb = ceiling;
+        floorPill.repaint();
     }
 
     // The dial's pointer goes flat when its filter is switched off -- the design

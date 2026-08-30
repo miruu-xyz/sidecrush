@@ -14,10 +14,12 @@ The sidechain does not drive a VCA. It drives a **clip ceiling that descends int
 
 ```
 sc      = source select (EXT sidechain bus | INT main input)
-sc      = MONO ? (L+R)/2 : per-channel
+sc      = STEREO ? per-channel : (L+R)/2      -- MONO and WTF both sum
 
-FILTER PRE:   mag = |lowpass(sc)|
-FILTER POST:  mag = max(0, lowpass(|sc|))     -- clamped, see 4.3
+               STEREO / MONO                 WTF, per channel (see 4.5)
+FILTER PRE:    mag = |lowpass(sc)|            mag = max(0, ±lowpass(sc))
+FILTER POST:   mag = max(0, lowpass(|sc|))    mag = max(0, lowpass(max(0, ±sc)))
+                                              -- clamped, see 4.3
 
 t       = clamp((mag - floor) / (ceiling - floor), 0, 1)
 d       = t^p              p = clamp(2^(-4 * shape), 1/32, 32)
@@ -79,17 +81,17 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 | MIX | float, % | 0 … 100 | 100 | parallel blend; the dry side is latency-compensated |
 | CLIP | bool | off / on | **on** | on = clip ceiling, off = VCA multiply |
 | FILTER POS | choice | PRE / POST | PRE | rectifier order |
-| SC LINK | choice | MONO / STEREO | STEREO | sidechain detection only; output is always stereo |
+| SC LINK | choice | STEREO / MONO / WTF | STEREO | sidechain detection only; output is always stereo (see 4.5) |
 | SC SOURCE | choice | EXT / INT | EXT | INT = main input drives its own lid |
-| HQ | bool | off / on | **on** | on = 8x linear phase, off = 4x minimum phase (see 4.1) |
+| QUALITY | choice | HQ / LQ / YUCK | **HQ** | 8x linear phase / 4x minimum phase / 1x unfiltered (see 4.1) |
 
 Notes:
 
 - **CEILING and FLOOR are tapered to amplitude, not to dB.** Both are quoted in dB, but a dial that is linear in dB puts almost everything in the top of its sweep: on a −60 … 0 range, half amplitude (−6 dB) sits 90 % of the way round, and the bottom half of the travel is inaudible fractions. Because the scope plots linear amplitude, the dial and the band it controls would move at visibly different rates. The normalisable range therefore maps dial position to linear gain, so the pointer and the threshold track each other. −100 dB is the conversions' minus-infinity so the bottom detent round-trips instead of collapsing to zero.
 - **FLOOR at minimum reads INSTANT, not OFF.** Nothing is switched off there — the lid starts moving the moment the sidechain does. Reading "OFF" next to a SHAPE dial invites the reading that the shaping is disabled.
-- **FLOOR is absolute, not relative to CEILING** — sweeping CEILING does not drag FLOOR with it. FLOOR is internally clamped to `min(floor, ceiling - 1 dB)` so the window can never invert. The preview shows the effective window, so the clamp is visible rather than silent.
+- **FLOOR is absolute, not relative to CEILING** — sweeping CEILING does not drag FLOOR with it. FLOOR is internally clamped to `min(floor, ceiling - 0.1 dB)` so the window can never invert: one step of FLOOR's own 0.1 dB grid, which is as narrow as the two controls can express and narrow enough that the pair reads as a single threshold. The preview shows the effective window, so the clamp is visible rather than silent — and so does the readout, which brackets the value it is being held at (`- -6.1 dB -`) rather than reporting a number the audio is not using. That text comes from the parameter's own string function, so the host's automation lane says it too.
 - **PRE and OUTPUT share a range** so the pair is not confusing to read.
-- **MIX is fully wet by default.** This is a limiter first and a parallel one only if asked. Two consequences are deliberate: below 100 % the ceiling is no longer hard, because the dry half is by definition unlimited; and the dry half is *not* ducked during an HQ switch, because the duck exists to hide a splice the dry path does not have.
+- **MIX is fully wet by default.** This is a limiter first and a parallel one only if asked. Two consequences are deliberate: below 100 % the ceiling is no longer hard, because the dry half is by definition unlimited; and the dry half is *not* ducked during a QUALITY switch, because the duck exists to hide a splice the dry path does not have.
 - **OUTPUT is the last thing in the chain, after MIX.** Trimming the wet half alone would mean pulling MIX down made the plugin louder by however much OUTPUT was cutting.
 - **CEILING turns conventionally**: clockwise = higher dBFS = gentler. Counter-clockwise lowers the ceiling.
 - 20 kHz is the top of the FILTER sweep because Nyquist at 48 kHz is 24 kHz. Above ~20 kHz the filter does nothing, so the top of the sweep *is* the off position.
@@ -100,12 +102,13 @@ Notes:
 ## 3. Signal flow
 
 ```
-                        ┌─────── 8x oversampled, 4x without HQ ────────┐
+                        ┌── 8x oversampled; 4x on LQ, 1x on YUCK ──────┐
                         │                                              │
  main in ──> PRE ───────┼──────────────────────────┐                   │
                         │                          │                   │
  sc source ──> link ────┼──> filter ──> rectify ──> t ──> d = t^p ──> lid
-   EXT | INT   MONO|ST  │   (PRE/POST order)                 │         │
+   EXT | INT  ST|MONO|  │   (PRE/POST order)                 │         │
+              WTF       │                                    │         │
                         │                                    v         │
                         │                       CLIP ? clamp(x, ±lid)  │
                         │                            : x * lid         │
@@ -114,7 +117,7 @@ Notes:
  main in ──> delay(latency) ─────────────> MIX ──> OUTPUT ──> main out
 ```
 
-Sidechain source and link happen at base rate; everything from the filter onward runs oversampled — 8x with HQ on, 4x with it off.
+Sidechain source and link happen at base rate; everything from the filter onward runs oversampled — 8x on HQ, 4x on LQ, and not at all on YUCK.
 
 ---
 
@@ -122,7 +125,7 @@ Sidechain source and link happen at base rate; everything from the filter onward
 
 ### 4.1 Oversampling
 
-**8x with HQ on, 4x with it off.** Four independent alias sources: the rectifier's corner at every zero crossing, the `t^p` exponent, the moving hard clamp, and the multiply itself (`carrier * lid` is bandwidth-expanding even in VCA mode, since `lid` carries harmonics up to Nyquist and the products fold). Moving hard clip is the worst of them; dedicated clippers routinely run 16–32x.
+**8x on HQ, 4x on LQ, 1x on YUCK.** Four independent alias sources: the rectifier's corner at every zero crossing, the `t^p` exponent, the moving hard clamp, and the multiply itself (`carrier * lid` is bandwidth-expanding even in VCA mode, since `lid` carries harmonics up to Nyquist and the products fold). Moving hard clip is the worst of them; dedicated clippers routinely run 16–32x.
 
 Use `juce::dsp::Oversampling` and report latency to the host.
 
@@ -138,14 +141,24 @@ Filtering at base rate and upsampling afterward stays valid in principle — the
 
 What the routing *can* skip is arithmetic it has already done: with INT + STEREO the detector is the main input, so the carrier's upsampled block is reused directly, and any routing that puts the same signal on every detector channel upsamples one channel instead of two. Both are exact and are checked bit-for-bit in `tests/host_test.cpp`.
 
-#### HQ
+#### QUALITY
 
-HQ off switches both paths to 4x polyphase IIR — minimum phase instead of linear — for about a third of the CPU, at an alias floor of −60 dB instead of −69 dB. Two constraints make it shippable rather than merely cheap:
+Three modes, measured at 48 kHz in 512-sample blocks:
 
-- **Latency must not move.** The shorter path is padded back out to the 8x figure, so `setLatencySamples` reports the same number in both modes and no host is asked to renegotiate delay compensation mid-session.
-- **The swap must not click.** Linear phase and minimum phase do not line up, so the seam steps regardless of how carefully the incoming cascade is primed — priming does not fix it. The output is ducked over ~4 ms and held silent until the padding delay has flushed. Unducked, the seam steps 22x the steady-state sample delta.
+| | factor | filter | alias floor | CPU |
+|---|---|---|---|---|
+| HQ | 8x | linear phase FIR | −69 dB | 3.5 % |
+| LQ | 4x | minimum phase IIR | −60 dB | 1.3 % |
+| YUCK | 1x | none | −32 dB | 0.3 % |
 
-Both oversampler pairs are built in `prepareToPlay`, so toggling HQ never allocates on the audio thread.
+LQ is the eco mode: a third of the CPU for 9 dB of alias floor, spending linear phase to get it. **YUCK is not an eco mode.** It is 1x — `juce::dsp::Oversampling` built with factor 0, which is a pass-through stage — so there is no anti-imaging filter of any kind and neither phase response applies. The aliasing is not a cost here, it is the feature; the moving hard clip folds its own harmonics back down the spectrum and that is what it sounds like.
+
+Two constraints apply to all three:
+
+- **Latency must not move.** The shorter paths are padded back out to the 8x figure, so `setLatencySamples` reports the same number in every mode and no host is asked to renegotiate delay compensation mid-session. YUCK, having no latency of its own, is padded by the whole of it.
+- **The swap must not click.** No two of the cascades line up, so the seam steps regardless of how carefully the incoming one is primed — priming does not fix it. The output is ducked over ~4 ms and held silent until the padding delay has flushed. Unducked, the seam steps 22x the steady-state sample delta.
+
+All three oversampler pairs are built in `prepareToPlay`, so changing QUALITY never allocates on the audio thread.
 
 ### 4.2 The shaping exponent
 
@@ -163,11 +176,31 @@ Cascaded **TPT state-variable** sections, Butterworth-aligned, one 1-pole sectio
 
 - mono → mono and stereo → stereo main buses; sidechain accepted as mono or stereo in both
 - no mono → stereo (doubles the bus-layout matrix for something nobody asks for)
-- on a mono instance, **grey out** MONO/STEREO rather than hiding it, so the panel does not reflow
+- on a mono instance, **grey out** the SC LINK selector rather than hiding it, so the panel does not reflow
 
-### 4.5 Real-time safety
+### 4.5 The WTF link
 
-`ScopedNoDenormals` in `processBlock`. No allocation, no locks, no file or GUI access on the audio thread. Scope data crosses to the editor via a lock-free FIFO only. HQ is the obvious way this could be broken — both oversampler pairs are therefore allocated up front and the toggle only switches which pair is addressed.
+The last position on SC LINK, not a control of its own — it is one more way for the detector's two channels to relate to each other, which is exactly what that selector already chooses.
+
+It **sums** the sidechain the way MONO does, then splits the sum by sign and gives one half to each channel: the positive excursions close the left lid, the negative ones close the right. Fed a low sine the two lids alternate at the sidechain's own rate, so the carrier appears to pan — a panning that comes from two clippers taking turns, not from any gain law.
+
+Two things follow from where the split sits:
+
+- **The rectifier has to be half-wave, not full-wave.** A full-wave rectifier is precisely the thing that discards the sign the split is made of. Flipping the right channel's copy of the sum turns "the negative half" into "the positive half", so one half-wave rectifier serves both sides.
+- **In POST the split must happen before the filter.** POST rectifies first and filters the result, so splitting afterwards would hand both channels the same envelope and there would be no pan left. Splitting first gives the filter two half-wave signals and it returns two envelopes, one per side. In PRE the filter is linear and runs on the still-bipolar sum, so the sign survives it and the split happens after — which is what keeps PRE at waveform rate.
+
+The scope keeps drawing the bipolar detector in PRE, so in WTF its top lobe is the left channel's lid and its bottom lobe the right's — and in this mode the display follows that all the way through, so that it looks the way it sounds:
+
+- **the aperture splits.** The mask closing from the top is the left lid, the one closing from the bottom is the right. Everywhere else the two lids are the same signal and the aperture is symmetric; here it visibly alternates, top then bottom, at the sidechain's own rate.
+- **the output is drawn once per channel.** The right sits at 30% throughout. The left carries the reading: full strength wherever the two outputs are the same signal — so that stretch of the trace is exactly as bright as the single line every other mode draws, with the right hidden underneath it — fading to the same 30% as the two come apart. The ramp is linear over about two pixels of separation at the display's own scale, which is where two traces stop being one line. So agreement reads as brightness: inside one half of the sub the lid holds one channel down at its peaks and lets both run free through the zero crossings, and the trace brightens and dims within a single carrier cycle to say so.
+
+  The alpha is a horizontal `ColourGradient` on the stroke with **a stop per pixel column**, taking the widest gap between the two channels inside that column. Coarser stops are what the first attempt did and they are wrong here: the gap turns over at the carrier's rate, not the sidechain's, so a stop every few columns smears every bright stretch away and the whole trace sits at 30%.
+
+On a mono instance only the positive half is left, since there is no second channel to hand the other one to.
+
+### 4.6 Real-time safety
+
+`ScopedNoDenormals` in `processBlock`. No allocation, no locks, no file or GUI access on the audio thread. Scope data crosses to the editor via a lock-free FIFO only. QUALITY is the obvious way this could be broken — all three oversampler pairs are therefore allocated up front and the switch only changes which pair is addressed.
 
 ---
 
@@ -194,7 +227,17 @@ than copied from the layer list — #b1b1b1 dodged over the #101419 background i
 Controls: PRE fader, CEILING dial (large), FILTER dial, SHAPE dial, SLOPE pill,
 FLOOR pill, OUT fader, a CLIP toggle in the scope's lower-right corner, and a
 gear in the upper-right that swaps the scope for a settings panel carrying
-STEREO / HQ / FILTER PRE / SIGNAL EXT, and SCALE below them.
+STEREO / HQ / FILTER PRE / SIGNAL EXT, and SCALE below them. The first two are
+three-way: STEREO cycles STEREO / MONO / WTF and HQ cycles HQ / LQ / YUCK.
+The link cycles away from its default into the ordinary alternative first —
+one click from STEREO is MONO, and WTF is past it. That also leaves the far
+end of the switch open: a second WTF engine would be another entry after this
+one rather than a renumbering of everything before it.
+
+**Right-clicking any pill backed by a list of choices opens that list as a
+menu**, so a three-way switch does not have to be cycled to find out what it
+can do. Cycling on left-click stays: it is the faster gesture once the options
+are known.
 
 SCALE sits apart from the other four: it is a UI preference, not a plug-in
 parameter, so it is deliberately absent from the host's automation list.
@@ -210,6 +253,7 @@ no designed popup anywhere in the file.
 | sidechain | cyan line, or a cyan body | the detector — the signal the thresholds measure. Bipolar in PRE; in POST the envelope and its mirror image |
 | lid | white mask at 8% | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
 | output | white line | slams flat against the aperture as it closes |
+| **in WTF** | one output per channel, split aperture | see 4.5 |
 | ±CEILING | cyan gradient bands | from each edge inward to the threshold; the clamped region |
 | ±FLOOR | red band | symmetric around the centre; collapses to nothing at INSTANT |
 
@@ -285,7 +329,10 @@ that a control should explain itself where they do not.
 - **CLIP** — engaged, it tints its own well red, borders in #e73131 and hangs a
   wide red glow. Off, it keeps a hairline border and drops its text to the
   section-caption tone rather than full white. **LQ** is dimmed the same way
-  against **HQ**, so the pair reads as one switch rather than two labels.
+  against **HQ**, so the set reads as one switch rather than three labels.
+  **YUCK** breaks that: #8d5c3d, the only warm colour on the panel, and light
+  enough to read as a warning rather than as another dimmed label — it is the one
+  setting that is not a trade-off but a deliberate mess.
 - **FILTER** — the word under the dial reads "FILTER" at rest and swaps to a cyan
   PRE / POST while hovered. Clicking it flips the two.
 - **FILTER and SHAPE captions** — while their dial is being dragged, the caption

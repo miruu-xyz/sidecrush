@@ -2,6 +2,7 @@
 // Not a test -- not registered with CTest. Run it by hand.
 
 #include "../Source/PluginProcessor.h"
+#include "check.h" // for setChoice; this file makes no assertions of its own
 
 #include <chrono>
 #include <cstdio>
@@ -90,8 +91,9 @@ void benchEngine (const char* name, int factor)
     juce::ignoreUnused (sink);
 }
 
-// Toggling HQ swaps one oversampler cascade for another. How audible is the seam?
-void measureHqSwitchGlitch()
+// Changing QUALITY swaps one oversampler cascade for another. How audible is
+// the seam? HQ to YUCK is the widest of the three jumps.
+void measureQualitySwitchGlitch()
 {
     constexpr int bs = 512;
     constexpr int totalBlocks = 40;
@@ -104,7 +106,7 @@ void measureHqSwitchGlitch()
     layout.outputBuses.add (juce::AudioChannelSet::stereo());
     proc.setBusesLayout (layout);
     proc.prepareToPlay (48000.0, bs);
-    proc.apvts.getParameter ("hq")->setValueNotifyingHost (1.0f);
+    setChoice (proc, "quality", 0);
 
     juce::AudioBuffer<float> buf { 4, bs };
     juce::MidiBuffer midi;
@@ -114,7 +116,7 @@ void measureHqSwitchGlitch()
     for (int b = 0; b < totalBlocks; ++b)
     {
         if (b == switchBlock)
-            proc.apvts.getParameter ("hq")->setValueNotifyingHost (0.0f);
+            setChoice (proc, "quality", 2);
 
         for (int i = 0; i < bs; ++i, ++n)
         {
@@ -140,12 +142,12 @@ void measureHqSwitchGlitch()
     const auto steady = step (bs * 5, bs * (switchBlock - 1));
     const auto seam = step (bs * switchBlock - 8, bs * switchBlock + 1600);
 
-    std::printf ("  steady-state step %.5f, worst step across the HQ switch %.5f (%.1fx)\n",
+    std::printf ("  steady-state step %.5f, worst step across the QUALITY switch %.5f (%.1fx)\n",
                  steady, seam, seam / juce::jmax (1.0e-9f, steady));
 }
 
 void benchWholePlugin (double rate = sr, bool internalSource = false, bool monoLink = false,
-                       const char* note = nullptr, bool hq = true)
+                       const char* note = nullptr, int quality = 0)
 {
     HardCapProcessor proc;
 
@@ -157,9 +159,9 @@ void benchWholePlugin (double rate = sr, bool internalSource = false, bool monoL
 
     proc.prepareToPlay (rate, blockSize);
 
-    proc.apvts.getParameter ("scsource")->setValueNotifyingHost (internalSource ? 1.0f : 0.0f);
-    proc.apvts.getParameter ("sclink")->setValueNotifyingHost (monoLink ? 0.0f : 1.0f);
-    proc.apvts.getParameter ("hq")->setValueNotifyingHost (hq ? 1.0f : 0.0f);
+    setChoice (proc, "scsource", internalSource ? 1 : 0);
+    setChoice (proc, "sclink", monoLink ? sclink::mono : sclink::stereo);
+    setChoice (proc, "quality", quality);
 
     juce::AudioBuffer<float> buf { 4, blockSize }; // main stereo + sidechain stereo
     fillNoise (buf);
@@ -204,13 +206,14 @@ int main()
     blocks = 4000;
     benchWholePlugin (96000.0);
 
-    std::printf ("\nHQ on vs off (48 kHz, 512-sample blocks, EXT + STEREO):\n");
-    benchWholePlugin (sr, false, false, "HQ on   -- 8x linear phase FIR", true);
-    benchWholePlugin (sr, false, false, "HQ off  -- 4x minimum phase IIR", false);
-    benchWholePlugin (sr, true, false, "HQ off + INT + STEREO", false);
+    std::printf ("\nQuality (48 kHz, 512-sample blocks, EXT + STEREO):\n");
+    benchWholePlugin (sr, false, false, "HQ   -- 8x linear phase FIR", 0);
+    benchWholePlugin (sr, false, false, "LQ   -- 4x minimum phase IIR", 1);
+    benchWholePlugin (sr, false, false, "YUCK -- 1x, no filter at all", 2);
+    benchWholePlugin (sr, true, false, "LQ + INT + STEREO", 1);
 
-    std::printf ("\nHQ switch continuity:\n");
-    measureHqSwitchGlitch();
+    std::printf ("\nQuality switch continuity:\n");
+    measureQualitySwitchGlitch();
 
     std::printf ("\nSidechain routing (48 kHz, 512-sample blocks):\n");
     benchWholePlugin (sr, false, false, "EXT + STEREO  (no shortcut)");
