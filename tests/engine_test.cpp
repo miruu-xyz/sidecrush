@@ -287,6 +287,106 @@ void wtfSplitsBySign()
     CHECK (widest > 0.2f);
 }
 
+//==============================================================================
+// WTF's intensity dial, at the three settings that are supposed to mean
+// something -- SPEC 4.5. The claim the whole feature rests on is the one at
+// 100%: the two channels come apart in stereo but their sum is bit-for-bit what
+// MONO would have produced, so the effect survives a mono speaker instead of
+// half-cancelling on it.
+//
+// Every case runs both filter positions and both CLIP modes: the correction is
+// applied after the lid, so it must not care which of the two the lid produced,
+// and POST reaches the mono detector through the filter's linearity rather than
+// directly, which is the part most likely to break.
+void wtfIntensityEndpoints()
+{
+    for (const auto post : { false, true })
+    for (const auto clip : { false, true })
+    {
+        const auto params = [post, clip] (float intensity, bool wtf)
+        {
+            auto p = baseParams();
+            p.wtf = wtf;
+            p.wtfIntensity = intensity;
+            p.clip = clip;
+            p.filterPost = post;
+            p.ceilingLin = 0.5f;
+            p.filterHz = post ? 400.0f : 0.0f;
+            return p;
+        };
+
+        // A sub on the sidechain and a louder tone on the carrier, panned hard
+        // enough that the two channels are genuinely different signals -- a mono
+        // carrier would let a wrong per-channel correction pass unnoticed.
+        const auto carrierL = [] (int i)
+        { return 0.9f * (float) std::sin (2.0 * std::numbers::pi * 700.0 * i / 48000.0); };
+
+        const auto carrierR = [] (int i)
+        { return 0.4f * (float) std::sin (2.0 * std::numbers::pi * 1100.0 * i / 48000.0 + 1.0); };
+
+        const auto sidechain = [] (int i)
+        { return 0.8f * (float) std::sin (2.0 * std::numbers::pi * 60.0 * i / 48000.0); };
+
+        constexpr int samples = 4800;
+
+        auto zero = makeEngine (params (0.0f, true));
+        auto half = makeEngine (params (0.5f, true));
+        auto full = makeEngine (params (1.0f, true));
+        auto mono = makeEngine (params (0.5f, false)); // wtf off = the MONO link
+        auto wide = makeEngine (params (0.5f, true));  // for the per-channel path
+
+        auto zeroGap = 0.0f, fullGap = 0.0f;
+
+        for (int i = 0; i < samples; ++i)
+        {
+            const auto sc = sidechain (i);
+
+            // 0% -- both channels see the whole rectified sum, which is exactly
+            // what the MONO link does. The reference here is the ordinary
+            // per-channel path with WTF off, so this also checks that the pair
+            // entry point and the single-channel one agree where they overlap.
+            auto zl = carrierL (i), zr = carrierR (i);
+            zero.processWtfPair (zl, zr, sc);
+
+            const auto ml = mono.processSample (0, carrierL (i), sc);
+            const auto mr = mono.processSample (1, carrierR (i), sc);
+
+            CHECK (near (zl, ml));
+            CHECK (near (zr, mr));
+
+            // The split is a property of the lids, not of the outputs: the two
+            // carriers are different signals, so their outputs differ in every
+            // mode and measuring them would say nothing about the split.
+            zeroGap = std::fmax (zeroGap, std::fabs (zero.lastLid (0) - zero.lastLid (1)));
+
+            // 50% -- the original WTF, sample for sample. A session saved before
+            // this dial existed has to sound the same, and the per-channel path
+            // is what it sounded like.
+            auto hl = carrierL (i), hr = carrierR (i);
+            half.processWtfPair (hl, hr, sc);
+
+            const auto wl = wide.processSample (0, carrierL (i), sc);
+            const auto wr = wide.processSample (1, carrierR (i), sc);
+
+            CHECK (near (hl, wl));
+            CHECK (near (hr, wr));
+
+            // 100% -- the sum is the mono effect exactly, and the channels are
+            // still nothing like each other.
+            auto fl = carrierL (i), fr = carrierR (i);
+            full.processWtfPair (fl, fr, sc);
+
+            CHECK (near (fl + fr, ml + mr));
+            fullGap = std::fmax (fullGap, std::fabs (full.lastLid (0) - full.lastLid (1)));
+        }
+
+        // 0% has to collapse the split entirely -- one lid, both channels, which
+        // is what makes it MONO. 100% keeps it as wide as WTF ever gets it.
+        CHECK (near (zeroGap, 0.0f));
+        CHECK (fullGap > 0.5f);
+    }
+}
+
 } // namespace
 
 int main()
@@ -299,6 +399,7 @@ int main()
     filterIsAStableLowpass();
     postRectifyEnvelopeStaysValid();
     wtfSplitsBySign();
+    wtfIntensityEndpoints();
 
     std::puts ("hardcap engine: all checks passed");
     return 0;

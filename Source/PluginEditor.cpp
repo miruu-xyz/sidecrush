@@ -999,7 +999,8 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
       link (p, ids::scLink, Pill::Gesture::cycle),
       quality (p, ids::quality, Pill::Gesture::cycle),
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
-      source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL")
+      source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL"),
+      wtfInt (p, ids::wtfInt, Pill::Gesture::drag, "WTF")
 {
     // The choice names itself, so nothing has to override the text. What the
     // design does say is that the three states are not equals: HQ is the live
@@ -1017,8 +1018,51 @@ SettingsPanel::SettingsPanel (HardCapProcessor& p)
 
     scale.setComponentID ("scale");
 
-    for (auto* pill : { &link, &quality, &filterPos, &source, &scale })
+    // A continuous dial has no choice list to right-click, so it gets the three
+    // settings that are worth naming -- the two ends and the original behaviour
+    // in the middle. Straight from the design's annotation on this pill.
+    wtfInt.onRightClick = [this, &p]
+    {
+        static const juce::StringArray items { "0% - Boring MONO :(",
+                                               "50% - L/R independent clipping :3",
+                                               "100% - Phase cancellation carnage B)" };
+        static constexpr float values[] { 0.0f, 50.0f, 100.0f };
+
+        auto& param = *p.apvts.getParameter (ids::wtfInt);
+        const auto current = juce::roundToInt (param.convertFrom0to1 (param.getValue()));
+
+        auto match = -1;
+
+        for (auto i = 0; i < 3; ++i)
+            if (current == juce::roundToInt (values[i]))
+                match = i;
+
+        showPillMenu (wtfInt, items, match,
+                      [&param] (int choice)
+                      {
+                          param.beginChangeGesture();
+                          param.setValueNotifyingHost (param.convertTo0to1 (values[choice]));
+                          param.endChangeGesture();
+                      });
+    };
+
+    for (auto* pill : { &link, &quality, &filterPos, &source, &scale, &wtfInt })
         addAndMakeVisible (pill);
+
+    linkWatch = std::make_unique<juce::ParameterAttachment> (
+        *p.apvts.getParameter (ids::scLink),
+        [this] (float value)
+        {
+            const auto shouldShow = juce::roundToInt (value) == sclink::wtf;
+
+            if (shouldShow == wtfInt.isVisible())
+                return;
+
+            wtfInt.setVisible (shouldShow);
+            resized(); // SCALE re-centres on its own when it loses its neighbour
+        });
+
+    linkWatch->sendInitialUpdate();
 }
 
 void SettingsPanel::paint (juce::Graphics& g)
@@ -1044,11 +1088,15 @@ void SettingsPanel::resized()
             b->setBounds (centreX - total / 2 + aWidth + 8, y, bWidth, 21);
     };
 
-    // Two rows of routing, then the scale on its own below a wider gap -- it is
-    // the one switch here that changes nothing about the audio.
-    row (link, 80, &quality, 43, centreY - 43);
-    row (filterPos, 101, &source, 107, centreY - 14);
-    row (scale, 105, nullptr, 0, centreY + 23);
+    // Two rows of routing, then a third for the two dials that are not routing
+    // at all. WTF joins SCALE there rather than the link it belongs to, because
+    // it is an amount and everything on the rows above is a switch.
+    // The three rows are one evenly-spaced block, centred: 21 tall each, 8
+    // apart. SCALE used to sit below a wider gap and the block was 87 tall; the
+    // updated frame spaces all three the same, so it is 79 and every row moves.
+    row (link, 80, &quality, 43, centreY - 40);
+    row (filterPos, 101, &source, 107, centreY - 11);
+    row (scale, 113, wtfInt.isVisible() ? &wtfInt : nullptr, 90, centreY + 18);
 }
 
 //==============================================================================

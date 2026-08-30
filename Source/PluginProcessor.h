@@ -21,6 +21,7 @@ namespace ids
     constexpr auto clip      = "clip";
     constexpr auto filterPos = "filterpos";
     constexpr auto scLink    = "sclink";
+    constexpr auto wtfInt    = "wtfint";
     constexpr auto scSource  = "scsource";
     constexpr auto quality   = "quality";
 }
@@ -168,7 +169,8 @@ private:
     struct Raw
     {
         std::atomic<float>* pre, *ceiling, *floorDb, *shape, *filterHz, *slope,
-                          *output, *mix, *clip, *filterPos, *scLink, *scSource, *quality;
+                          *output, *mix, *clip, *filterPos, *scLink, *wtfInt,
+                          *scSource, *quality;
     };
 
     Raw raw {};

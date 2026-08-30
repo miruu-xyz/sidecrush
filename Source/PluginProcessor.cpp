@@ -138,6 +138,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
         ParameterID { ids::scLink, 1 }, "Sidechain Link",
         StringArray { "STEREO", "MONO", "WTF" }, sclink::stereo));
 
+    // How far WTF is taken. 50% is the original behaviour and the default, so
+    // this parameter appearing does not move any session that predates it. 0%
+    // hands both channels the whole rectified sum, which is MONO; 100% cancels
+    // the effect's leak into the mono sum, so a mono listener hears exactly the
+    // MONO result while the stereo image comes apart. See SPEC 4.5.
+    //
+    // Inert unless SC LINK is on WTF, which is why the editor only shows it
+    // there -- but it stays a real parameter in every mode, because a host
+    // automating something that vanishes from the list is worse than a host
+    // automating something that currently does nothing.
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::wtfInt, 1 }, "WTF Intensity",
+        NormalisableRange<float> { 0.0f, 100.0f, 1.0f }, 50.0f,
+        AudioParameterFloatAttributes{}.withStringFromValueFunction (
+            [] (float v, int) { return String (roundToInt (v)) + "%"; })));
+
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::scSource, 1 }, "Sidechain Source",
         StringArray { "EXT", "INT" }, 0));
@@ -163,7 +179,8 @@ HardCapProcessor::HardCapProcessor()
             get (ids::shape),     get (ids::filterHz),  get (ids::slope),
             get (ids::output),    get (ids::mix),       get (ids::clip),
             get (ids::filterPos),
-            get (ids::scLink),    get (ids::scSource),  get (ids::quality) };
+            get (ids::scLink),    get (ids::wtfInt),
+            get (ids::scSource),  get (ids::quality) };
 }
 
 bool HardCapProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -268,6 +285,7 @@ void HardCapProcessor::pullParameters()
     p.clip = raw.clip->load() > 0.5f;
     p.filterPost = raw.filterPos->load() > 0.5f;
     p.wtf = (int) raw.scLink->load() == sclink::wtf;
+    p.wtfIntensity = raw.wtfInt->load() * 0.01f;
 
     // Applied every block, no smoothing and no change detection -- SPEC 2. The
     // only part worth guarding is the filter's tan and sins, and DetectorFilter
@@ -420,10 +438,19 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     // the left one -- which is also what a mono instance gets.
     const auto stereoLids = channels > 1;
 
+    // Above 50% intensity WTF's two channels are no longer independent -- the
+    // correction that makes the mono sum cancel is computed from the pair -- so
+    // a stereo instance in WTF takes the engine's two-channel entry point. Both
+    // detector pointers are the same summed signal there, so either will do.
+    const auto wtfPair = engine.getParams().wtf && stereoLids;
+
     for (size_t i = 0; i < osSamples; ++i)
     {
-        for (int ch = 0; ch < channels; ++ch)
-            carrierPtr[ch][i] = engine.processSample (ch, carrierPtr[ch][i], detectorPtr[ch][i]);
+        if (wtfPair)
+            engine.processWtfPair (carrierPtr[0][i], carrierPtr[1][i], detectorPtr[0][i]);
+        else
+            for (int ch = 0; ch < channels; ++ch)
+                carrierPtr[ch][i] = engine.processSample (ch, carrierPtr[ch][i], detectorPtr[ch][i]);
 
         const auto lid = engine.lastLid (0);
         const auto lidR = stereoLids ? engine.lastLid (1) : lid;

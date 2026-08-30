@@ -201,6 +201,7 @@ struct Params
     bool clip = true;          // true = clip ceiling, false = VCA multiply
     bool filterPost = false;   // rectifier order
     bool wtf = false;          // split the summed sidechain: + shuts L, - shuts R
+    float wtfIntensity = 0.5f; // 0 .. 1, how far WTF is taken -- see 4.5
 };
 
 class Engine
@@ -255,11 +256,31 @@ public:
 
         shapeTable.setShape (params.shape);
 
+        // WTF's intensity moves two things, one per half of its travel -- SPEC
+        // 4.5. Below 50% the detector split opens up, from both channels seeing
+        // the whole rectified sum (which is MONO) to each seeing only its own
+        // half. Above 50% the split stays open and the *mid* is replaced by what
+        // MONO would have produced, which is what makes a mono sum cancel back
+        // to the mono effect exactly.
+        //
+        // 50% therefore lands on both endpoints of that pair at once -- split
+        // fully open, mid untouched -- so it is the original WTF to the sample,
+        // and a session saved before this dial existed still sounds like itself.
+        const auto intensity = std::clamp (params.wtfIntensity, 0.0f, 1.0f);
+        splitAmount = std::min (1.0f, 2.0f * intensity);
+        midBlend = std::max (0.0f, 2.0f * intensity - 1.0f);
+
         for (auto& f : filters)
             f.setup (params.filterHz, params.poles, sampleRate);
     }
 
     // One sample of one channel. `sc` is the detector input for this channel.
+    //
+    // A stereo instance in WTF goes through processWtfPair below instead, which
+    // needs both channels at once. What is left here is the mono instance, whose
+    // WTF is fixed at the 50% behaviour: with one channel there is no second half
+    // to hand the negative excursions to and no mid to cancel anything against,
+    // so the intensity dial has nothing to move -- SPEC 4.5.
     float processSample (int channel, float carrier, float sc) noexcept
     {
         auto& filter = filters[(size_t) channel];
@@ -301,17 +322,105 @@ public:
             mag = params.wtf ? std::max (0.0f, sign * filtered) : std::abs (filtered);
         }
 
-        const auto t = std::clamp ((mag - params.floorLin) * windowScale, 0.0f, 1.0f);
-        const auto lid = shapeTable.lid (t);
+        const auto lid = lidFor (mag);
         lids[(size_t) channel] = lid;
-
-        const auto driven = carrier * params.preGain;
-        const auto shaped = params.clip ? std::clamp (driven, -lid, lid)
-                                        : driven * lid;
 
         // OUTPUT is deliberately not here: it is the last thing in the chain,
         // after MIX, so it has to scale the blend and not just the wet half.
-        return shaped;
+        return shaped (carrier * params.preGain, lid);
+    }
+
+    // One sample of both channels, WTF only. The two channels stop being
+    // independent above 50% intensity -- the correction is computed from the
+    // pair -- so this cannot be a per-channel call like the one above.
+    //
+    // `sc` is the summed sidechain, the same number for both channels, which is
+    // what the WTF and MONO routings already hand the detector.
+    void processWtfPair (float& left, float& right, float sc) noexcept
+    {
+        // The two half-wave detector signals the split is made of, and beside
+        // them the detector MONO would have built from the same sidechain. The
+        // mono one costs no extra filter: the sections are linear, so the two
+        // halves' envelopes sum to the envelope of the whole.
+        float hPos, hNeg, monoMag;
+
+        if (params.filterPost)
+        {
+            // The split is before the filter here, exactly as it is per-channel:
+            // rectifying first and splitting after would hand both sides the
+            // same envelope and there would be no pan left -- SPEC 4.5.
+            const auto envPos = filters[0].process (std::max (0.0f, sc));
+            const auto envNeg = filters[1].process (std::max (0.0f, -sc));
+
+            // Butterworth rings below zero on a rectified signal and the clamp
+            // that fixes that -- SPEC 4.3 -- is why the sum has to be taken
+            // before it and not after. Clamping the halves and then adding them
+            // is not clamping the sum: whenever the ringing puts one half below
+            // zero while the other is above, the two disagree, and the mono
+            // detector this mode is aiming at is the second one.
+            monoMag = std::max (0.0f, envPos + envNeg);
+
+            hPos = std::max (0.0f, envPos);
+            hNeg = std::max (0.0f, envNeg);
+            detectors[0] = hPos;
+            detectors[1] = hNeg;
+        }
+        else
+        {
+            // Both filters see the same bipolar sum and return the same number.
+            // Running the second one anyway keeps its state in step with the
+            // first, so leaving WTF does not resume channel 1 from a filter that
+            // stopped updating however long ago the mode was selected.
+            const auto filtered = filters[0].process (sc);
+            filters[1].process (sc);
+            detectors[0] = detectors[1] = filtered;
+
+            hPos = std::max (0.0f, filtered);
+            hNeg = std::max (0.0f, -filtered);
+            monoMag = std::abs (filtered);
+        }
+
+        // splitAmount 1 is the full split, 0 puts the mono detector on both
+        // channels -- which is MONO, since the two lids then agree exactly.
+        const auto blend = 1.0f - splitAmount;
+        const auto lidL = lidFor (splitAmount * hPos + blend * monoMag);
+        const auto lidR = lidFor (splitAmount * hNeg + blend * monoMag);
+        lids[0] = lidL;
+        lids[1] = lidR;
+
+        const auto drivenL = left * params.preGain;
+        const auto drivenR = right * params.preGain;
+
+        auto outL = shaped (drivenL, lidL);
+        auto outR = shaped (drivenR, lidR);
+
+        // Above 50% the pair is slid until its mid is the mono result. What is
+        // left between the channels is untouched, so the difference the split
+        // makes -- the whole of the effect -- survives in the sides while the
+        // mono sum cancels back to exactly what MONO would have produced. That
+        // cancellation is the point: the clipping a mono listener hears is the
+        // two channels' opposite halves annihilating, not either channel's own.
+        //
+        // The correction is the same number on both channels, which is what
+        // makes it cancel; a per-channel one would not.
+        if (midBlend > 0.0f)
+        {
+            const auto lidMono = lidFor (monoMag);
+            const auto correction = midBlend * 0.5f
+                                    * ((shaped (drivenL, lidMono) + shaped (drivenR, lidMono))
+                                       - (outL + outR));
+            outL += correction;
+            outR += correction;
+        }
+
+        // Above 50% neither channel is clamped to the lid any more -- one of them
+        // is deliberately pushed past it by the half of the excess it was handed.
+        // That is unavoidable: two signals both clamped at the lid sum to
+        // something also clamped at the lid, so a per-channel ceiling and an
+        // exact mono sum cannot both hold. The ceiling becomes a mono-sum
+        // ceiling, and the scope's aperture stops bounding the trace it draws.
+        left = outL;
+        right = outR;
     }
 
     float lastLid (int channel) const noexcept { return lids[(size_t) channel]; }
@@ -323,6 +432,18 @@ public:
     const Params& getParams() const noexcept { return params; }
 
 private:
+    // t = clamp((mag - floor) / (ceiling - floor), 0, 1), then lid = 1 - t^p.
+    float lidFor (float mag) const noexcept
+    {
+        return shapeTable.lid (std::clamp ((mag - params.floorLin) * windowScale, 0.0f, 1.0f));
+    }
+
+    // The lid applied to an already-driven carrier: a wall, or a gain.
+    float shaped (float driven, float lid) const noexcept
+    {
+        return params.clip ? std::clamp (driven, -lid, lid) : driven * lid;
+    }
+
     Params params;
     ShapeTable shapeTable;
     std::vector<DetectorFilter> filters { 2 };
@@ -330,6 +451,11 @@ private:
     std::vector<float> detectors { 0.0f, 0.0f };
     double sampleRate = 44100.0;
     float windowScale = 2.0f;
+
+    // WTF intensity, split into the two things it moves. Both are 0 at 50%,
+    // which is why that setting is the original WTF exactly. See setParams.
+    float splitAmount = 1.0f; // 0 = no split (MONO), 1 = the full split
+    float midBlend = 0.0f;    // 1 = the mid is what MONO would have made
 };
 
 } // namespace hardcap

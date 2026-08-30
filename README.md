@@ -51,6 +51,8 @@ By default everything runs at 8× oversampling: a hard clip whose threshold move
 
 **WTF** is the third position on the sidechain link. It sums the sidechain like MONO, then splits the sum by sign and hands one half to each channel: the modulator's positive peaks clip only the left, its negative peaks only the right. On a low sub the two clippers take turns and the carrier appears to pan. In POST the split happens before the filter, so each side gets its own envelope and the pan survives the smoothing. The scope shows it: the aperture's top edge is the left lid and its bottom edge the right, and the output is drawn once per channel — full brightness where the two channels agree, both fading back to 30% where the clippers are taking turns.
 
+The **WTF** dial next to it says how far to take that, and it spans further in both directions than the switch alone can. At 0% the split closes up and both channels get the same lid, which is MONO. 50% is the behaviour above, and the default. At 100% the plugin stops throwing away the part of the carrier the lid cuts and hands it to *both* channels with opposite signs instead — so in stereo it is still there, wide and on the wrong side of the lid, and on the way to mono it cancels. The point of that is what a mono listener hears: below 100% WTF half-cancels when summed, because at any instant one channel is clipped and the other is not, so a phone speaker gets a weaker plugin than the room does. At 100% the sum is *exactly* the MONO link while the stereo image comes apart. Right-click the dial for the three settings by name.
+
 ## Building
 
 Requires CMake 3.22+ and a C++20 compiler. JUCE 9.0.1 is fetched automatically.
@@ -77,8 +79,8 @@ On macOS, building without full Xcode works — Command Line Tools are enough fo
 
 Two, both plain executables with no framework:
 
-- `hardcap_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
-- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the four things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that WTF actually drives the two channels apart, that changing quality does not move the reported latency, and that the swap does not click.
+- `hardcap_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, WTF's intensity landing on MONO, the original WTF and an exact mono sum at its three marked settings, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
+- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the five things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that WTF actually drives the two channels apart, that WTF at 100% sums back to exactly the MONO link, that changing quality does not move the reported latency, and that the swap does not click.
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
 
