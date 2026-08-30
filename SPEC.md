@@ -26,6 +26,7 @@ lid     = 1 - d
 CLIP on:   out = clamp(carrier * pre, -lid, +lid)
 CLIP off:  out = carrier * pre * lid
 
+out     = mix * out + (1 - mix) * dry   -- dry delayed by the reported latency
 out     = out * output
 ```
 
@@ -70,11 +71,12 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 |---|---|---|---|---|
 | PRE | float, dB | −36 … +36 | 0 | carrier drive into the lid |
 | CEILING | float, dBFS | −60 … 0 | −6 | sidechain level at which the lid fully closes |
-| FLOOR | float, dBFS | OFF … 0 | OFF | absolute; displays "OFF" at minimum |
+| FLOOR | float, dBFS | −60 … 0 | −60 | absolute; displays "INSTANT" at minimum |
 | SHAPE | float | −1.00 … +1.00 | 0.00 | bipolar, centre detent |
 | FILTER | float, Hz | 20 … 20000, then OFF | OFF | logarithmic; OFF is the top detent |
 | SLOPE | choice | 6/12/18/24/30/36/42/48 dB/oct | 12 | 1–8 poles, snapped |
 | OUTPUT | float, dB | −36 … +36 | 0 | same range as PRE, deliberately |
+| MIX | float, % | 0 … 100 | 100 | parallel blend; the dry side is latency-compensated |
 | CLIP | bool | off / on | **on** | on = clip ceiling, off = VCA multiply |
 | FILTER POS | choice | PRE / POST | PRE | rectifier order |
 | SC LINK | choice | MONO / STEREO | STEREO | sidechain detection only; output is always stereo |
@@ -83,11 +85,15 @@ Bipolar. Controls **where along the sidechain's travel the lid breaks**, not wha
 
 Notes:
 
+- **CEILING and FLOOR are tapered to amplitude, not to dB.** Both are quoted in dB, but a dial that is linear in dB puts almost everything in the top of its sweep: on a −60 … 0 range, half amplitude (−6 dB) sits 90 % of the way round, and the bottom half of the travel is inaudible fractions. Because the scope plots linear amplitude, the dial and the band it controls would move at visibly different rates. The normalisable range therefore maps dial position to linear gain, so the pointer and the threshold track each other. −100 dB is the conversions' minus-infinity so the bottom detent round-trips instead of collapsing to zero.
+- **FLOOR at minimum reads INSTANT, not OFF.** Nothing is switched off there — the lid starts moving the moment the sidechain does. Reading "OFF" next to a SHAPE dial invites the reading that the shaping is disabled.
 - **FLOOR is absolute, not relative to CEILING** — sweeping CEILING does not drag FLOOR with it. FLOOR is internally clamped to `min(floor, ceiling - 1 dB)` so the window can never invert. The preview shows the effective window, so the clamp is visible rather than silent.
 - **PRE and OUTPUT share a range** so the pair is not confusing to read.
+- **MIX is fully wet by default.** This is a limiter first and a parallel one only if asked. Two consequences are deliberate: below 100 % the ceiling is no longer hard, because the dry half is by definition unlimited; and the dry half is *not* ducked during an HQ switch, because the duck exists to hide a splice the dry path does not have.
+- **OUTPUT is the last thing in the chain, after MIX.** Trimming the wet half alone would mean pulling MIX down made the plugin louder by however much OUTPUT was cutting.
 - **CEILING turns conventionally**: clockwise = higher dBFS = gentler. Counter-clockwise lowers the ceiling.
 - 20 kHz is the top of the FILTER sweep because Nyquist at 48 kHz is 24 kHz. Above ~20 kHz the filter does nothing, so the top of the sweep *is* the off position.
-- **No parameter smoothing anywhere.** Not on the lid path, and — deliberately, unlike most plugins — not on PRE, OUTPUT, CEILING, FLOOR or SHAPE either. Every parameter is read once per block and applied as a step. The usual 10–20 ms ramp exists to hide zipper noise; here that noise is the point. A hard automation lane on PRE or CEILING should sound *yanked*, not eased, and the block-rate stepping is part of what makes a fast sweep sound like something breaking rather than something fading. Smoothing would sand off exactly the roughness this plugin exists to produce. The host's buffer size is the only knob that changes how coarse the steps are, and that is the user's call.
+- **No parameter smoothing anywhere.** Not on the lid path, and — deliberately, unlike most plugins — not on PRE, OUTPUT, MIX, CEILING, FLOOR or SHAPE either. Every parameter is read once per block and applied as a step. The usual 10–20 ms ramp exists to hide zipper noise; here that noise is the point. A hard automation lane on PRE or CEILING should sound *yanked*, not eased, and the block-rate stepping is part of what makes a fast sweep sound like something breaking rather than something fading. Smoothing would sand off exactly the roughness this plugin exists to produce. The host's buffer size is the only knob that changes how coarse the steps are, and that is the user's call.
 
 ---
 
@@ -105,7 +111,7 @@ Notes:
                         │                            : x * lid         │
                         └──────────────────┬───────────────────────────┘
                                            v
-                                        OUTPUT ──> main out
+ main in ──> delay(latency) ─────────────> MIX ──> OUTPUT ──> main out
 ```
 
 Sidechain source and link happen at base rate; everything from the filter onward runs oversampled — 8x with HQ on, 4x with it off.
@@ -167,38 +173,205 @@ Cascaded **TPT state-variable** sections, Butterworth-aligned, one 1-pole sectio
 
 ## 5. Interface
 
-Panel layout is defined in Figma:
+Panel layout is defined in Figma and the file is the source of truth:
 https://www.figma.com/design/Hc5nzirm4UIGqWrgbs5Uy2/Miruu-Plugin-Collection?node-id=1-11
 
-Controls: PRE slider, CEILING knob (large), FILTER knob, SHAPE knob, SLOPE field, FLOOR field, OUTPUT slider, and a toggle row under the scope — CLIP / FILTER POS / SC LINK / SC SOURCE.
+The canvas is **968 x 326** and the editor is laid out against those coordinates
+exactly. It does not reflow: the whole editor carries an affine scale of 75 /
+100 / 125 / 150 %, stored in the plug-in state. The switch lives in the settings
+panel rather than on a background right-click, because a menu that only exists
+where nothing is drawn is a menu nobody finds.
+
+Typeface is Zalando Sans Expanded (OFL), embedded from `Resources/fonts/`. Figma
+sizes are em sizes, so they are applied with `withPointHeight`, not `withHeight`.
+
+Most of the design's text and hairlines use `mix-blend-mode: color-dodge`, which
+has no JUCE equivalent. The palette in `PluginEditor.h` is therefore **sampled
+from a 1:1 render of the frame** (`Resources/reference/figma-1-11.png`) rather
+than copied from the layer list — #b1b1b1 dodged over the #101419 background is
+#344151, and only the second number can be used directly.
+
+Controls: PRE fader, CEILING dial (large), FILTER dial, SHAPE dial, SLOPE pill,
+FLOOR pill, OUT fader, a CLIP toggle in the scope's lower-right corner, and a
+gear in the upper-right that swaps the scope for a settings panel carrying
+STEREO / HQ / FILTER PRE / SIGNAL EXT, and SCALE below them.
+
+SCALE sits apart from the other four: it is a UI preference, not a plug-in
+parameter, so it is deliberately absent from the host's automation list.
+
+The settings panel is a **swap, not an overlay** — it takes the scope's exact
+bounds, which is how Figma draws it (Oscilloscope variant "Variant3"). There is
+no designed popup anywhere in the file.
 
 ### 5.1 Oscilloscope
 
 | element | colour | meaning |
 |---|---|---|
-| sidechain | cyan line | filtered sidechain, post-filter, pre-rectifier — the signal the thresholds measure |
-| ±CEILING | blue lines | symmetric, because the detector is rectified |
-| ±FLOOR | red lines | symmetric; collapse onto the centre line when FLOOR is OFF |
-| lid | grey aperture mask | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
-| output | white line | squashes flat against the mask as it descends |
+| sidechain | cyan line, or a cyan body | the detector — the signal the thresholds measure. Bipolar in PRE; in POST the envelope and its mirror image |
+| lid | white mask at 8% | fills everything *outside* ±lid, so the cap visibly closes in from top and bottom |
+| output | white line | slams flat against the aperture as it closes |
+| ±CEILING | cyan gradient bands | from each edge inward to the threshold; the clamped region |
+| ±FLOOR | red band | symmetric around the centre; collapses to nothing at INSTANT |
 
-The lid is drawn as a **closing aperture rather than a line** — it stops competing with the sidechain for line-reading attention, and makes "hard cap" literal. No input ghost trace: four elements is already a lot, and the undamaged parts of the output imply it.
+Which of those are drawn depends on what is being touched — see 5.3. There is no
+zero line: the sidechain is symmetric about it and says where it is by itself.
 
-Both traces share one normalised amplitude axis (±1.0 full scale), which is legitimate because carrier and sidechain are both full-scale audio.
+Both traces share one normalised amplitude axis (±1.0 full scale), which is
+legitimate because carrier and sidechain are both full-scale audio.
 
-**Triggering:** latch on the rising zero crossing of the filtered sidechain with a holdoff; free-run when it is silent.
-**Timebase:** derive the period from the measured zero-crossing interval and clamp it, so the window auto-scales to show ~2 cycles regardless of the sub's pitch. Without this a 40 Hz sub and a 100 Hz sub look wildly different.
+**The sidechain is drawn only where it is doing something.** Its cyan runs
+through a vertical gradient whose stops sit on the thresholds: solid outside
+±CEILING, fading through the window, and fully transparent inside ±FLOOR. So the
+trace reports its own relevance without needing the bands drawn, which is what
+lets the resting state carry no overlay at all. At INSTANT the floor stops
+collapse together and the fade simply runs to the zero crossing.
+
+JUCE fills a stroke from a gradient as readily as it fills a shape, so this and
+the greyed outline below are both a `ColourGradient` and a `strokePath` rather
+than anything cleverer — which is what the Figma annotation asks for when it says
+it built the effect by hand and to "do this in the easiest programmatic way".
+
+**POST is drawn mirrored.** The detector in POST is a rectified envelope, so
+plotted literally it is a half-wave sitting on the centre line -- it reads as a
+broken trace, not as the signal a symmetric pair of thresholds is measuring. The
+trace is drawn together with its reflection about the centre, which brackets the
+centre the way the lid does. The data is untouched: the reflection is the same
+sample at the same x, so the envelope still crosses CEILING exactly where the lid
+closes and cannot drift out of step with it. Redrawing the raw pre-rectifier
+sidechain there instead would drift -- the filter is after the rectifier in POST,
+so the wave and the thing driving the lid are no longer the same signal.
+
+**Layer order** follows Figma: traces first, then the ceiling bands, then the
+floor band over the top. Drawing the bands underneath instead loses the tint
+where a trace crosses into the clamped region, which is the one place the
+overlay is telling you something.
+
+**Thresholds** are derived in the editor from the parameters, not mirrored out
+of the engine. The engine only refreshes its copy inside `processBlock`, so in a
+stopped host the bands would sit at their defaults until playback started.
+
+**Triggering:** latch on the most recent rising crossing of the trace's own
+mean. In PRE the detector is bipolar and the mean is ~0, i.e. a zero crossing; in
+POST it is a rectified envelope that never goes negative, where a zero crossing
+could only fire at the bottom of the clamp and the display would free-run.
+
+**Timebase:** derive the period from the measured crossing interval and clamp it,
+so the window auto-scales to ~2 cycles regardless of the sub's pitch. Without
+this a 40 Hz sub and a 100 Hz sub look wildly different.
+
+**Sampling:** two cycles of a 40 Hz sub is ~2400 samples across 380 pixels, so
+each pixel column is drawn as the min/max of the samples inside it. A polyline
+through every sixth sample misses the peaks, and which samples it lands on shifts
+frame to frame, so the carrier appears to crawl.
+
+Each extreme is placed at the x of the sample it came from, not at the column's
+centre, and the whole trace is one continuous path. Snapping to columns turns
+every diagonal into a staircase — which is most of what a slow sidechain is made
+of — and separate subpaths get their own end caps, which doubles the line weight
+wherever columns meet and leaves the trace visibly heavier in dense passages.
+
 **Channel:** left only.
-**Repaint:** 30 fps from a lock-free FIFO. The FIFO is still filled at base rate; 30 is plenty to read and costs half of 60, and this timer runs for as long as the editor is open whether or not the host is playing.
+**Repaint:** 30 fps from a lock-free FIFO. The FIFO is still filled at base rate;
+30 is plenty to read and costs half of 60, and this timer runs for as long as the
+editor is open whether or not the host is playing.
 
 ### 5.2 Interaction states
 
-- dragging **SHAPE** → highlight the aperture mask, showing the ramp as it would be applied
-- dragging **CEILING** or **FLOOR** → highlight the corresponding threshold lines
-- **FILTER** knob greys out at the OFF detent
-- **SLOPE** field is draggable and snaps to the eight values
-- the dot beside CEILING is a **lid-activity LED**: brightness tracks instantaneous gain reduction
-- mono instance → MONO/STEREO greyed to its inoperative state
+Taken from the Figma component variants where they exist, and from the principle
+that a control should explain itself where they do not.
+
+- **Generic Interactable** — a pill gains a cyan border and a soft cyan glow while
+  hovered or dragged. Applies to SLOPE, FLOOR, CLIP, the settings switches and SCALE.
+- **CLIP** — engaged, it tints its own well red, borders in #e73131 and hangs a
+  wide red glow. Off, it keeps a hairline border and drops its text to the
+  section-caption tone rather than full white. **LQ** is dimmed the same way
+  against **HQ**, so the pair reads as one switch rather than two labels.
+- **FILTER** — the word under the dial reads "FILTER" at rest and swaps to a cyan
+  PRE / POST while hovered. Clicking it flips the two.
+- **FILTER and SHAPE captions** — while their dial is being dragged, the caption
+  is replaced by the dial's current value in the readout colour. Those two dials
+  are the only ones with no readout of their own, so without this they are the
+  only controls you cannot see the value of while setting it.
+- **FILTER dial** — its pointer goes flat grey at the OFF detent, and the SLOPE
+  pill reads OFF with it. It is the only dial that does this.
+- **SLOPE** — draggable, and clicking it opens the eight choices as a menu rather
+  than stepping blindly through them. With the filter switched off there are no
+  slopes to choose between, so dragging sweeps the **filter's cutoff** instead of
+  doing nothing visible, and picking a slope from the menu brings the filter in
+  at **160 Hz**. A control that is inert in a reachable state reads as broken.
+- **the scope is a CEILING control.** Drag anywhere in it and the threshold, the
+  bands and the dial all follow. Because CEILING is tapered to amplitude and the
+  display's vertical axis *is* amplitude, one pixel of drag is one pixel of
+  threshold — the band edge tracks the pointer exactly, and there is no
+  sensitivity constant to pick because the display already fixes the scale.
+- the dot beside CEILING is a **lid-activity LED**: brightness tracks
+  instantaneous gain reduction.
+
+### 5.3 What the scope shows, and when
+
+The overlays are not decoration and are never all on at once. Each answers the
+question the control being touched is asking, and hides whatever would compete
+with the answer.
+
+| state | shown |
+|---|---|
+| at rest | the lid aperture, the sidechain as a line, the output |
+| **dragging** CEILING, FLOOR, or the scope itself | the sidechain as a filled body, the ceiling and floor bands, the output at 10% — **no lid** |
+| dragging SHAPE | the SHAPE curve alone; no audio, no bands, no CLIP |
+
+**Hover does not raise the bands.** The resting state already carries the
+thresholds in the sidechain's own fade, so there is nothing to reveal, and
+raising them on hover made the display flash every time the pointer crossed a
+dial on its way somewhere else. Only a gesture that is actually changing a
+threshold changes the picture.
+
+There are two audio states, not three: a drag on CEILING and a drag on FLOOR show
+the same thing, because that state answers both questions at once. The sidechain
+fills out into a solid body against the bands and everything else steps back
+rather than being removed. The output drops to a 10% ghost — enough to keep the
+context, not enough to compete — and the lid aperture goes entirely, since the
+question being asked is about the sidechain's level and the aperture is about
+what happened to the carrier.
+
+The sidechain's outline also **greys out where it passes inside the floor band**,
+where the lid is wide open and the level is not doing anything. That is one more
+`ColourGradient` on the stroke, with its stops on ±FLOOR.
+
+The SHAPE curve replaces the scope rather than overlaying it, because a transfer
+curve and a waveform share an axis and mean different things by it. Only the
+wordmark and the gear carry over — CLIP goes with the rest, since it belongs to
+the scope's frame rather than to the curve standing in for it.
+
+It is drawn on a **centred square**, x being how far the detector has crossed the
+FLOOR→CEILING window and y how far the lid has closed by then. The square is the
+point: SHAPE 0 is then a true 45 degrees, and the two halves of the control read
+as the reflections they actually are. The exponent is `2^(-4*shape)`, so +s and
+−s give `t^p` against `t^(1/p)` — exact mirror images about that diagonal. On the
+scope's own 380×230 frame neither would be true.
+
+The values come from an instance of the engine's own `ShapeTable`, not from a
+second copy of the formula, so the exponent, its [1/32, 32] clamp and the table's
+quantisation are all the ones the audio uses.
+
+**The curve is deliberately a guide, not a transfer plot.** The engine's shaping
+is `1 - t^p`, which has a single knee. What is drawn is that half-curve plus its
+own 180° rotation about the centre of the square, so it has two: SHAPE −1 reads
+as an S that eases in and out, SHAPE +1 as a squared-off step that slams and
+holds. That is what those settings *sound* like, and it is the shape the design
+asks for; the literal one-knee curve reads as a lopsided swoop that says nothing
+useful about the difference between the two ends.
+
+The doubling is chosen so it cannot lie about anything that matters. Both halves
+meet exactly at (0.5, 0.5); the curve still leaves (0,0) and arrives at (1,1); it
+stays monotonic throughout; and at SHAPE 0 the exponent is 1, both halves
+collapse onto the same straight line, and the diagonal is exact. So "left of
+centre breaks later and gentler, right of centre breaks sooner and harder" stays
+true — only the curvature between the endpoints is stylised.
+
+The drawn floor is put through the engine's own `clampFloor`, so the band cannot
+be shown above the ceiling when the audio would not allow it. The clamp constant
+lives in `HardCapEngine.h` and is used by both; two copies would drift apart and
+the symptom would be a band that does not sit where the floor is.
 
 ---
 

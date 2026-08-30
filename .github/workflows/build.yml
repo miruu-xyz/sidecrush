@@ -78,7 +78,7 @@ jobs:
         uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Cache JUCE checkout
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: ${{ runner.os }}-juce-9.0.1
@@ -121,7 +121,7 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ]; then xvfb-run -a $RUN; else $RUN; fi
 
       - name: Upload VST3
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HardCap-${{ matrix.name }}
           path: build/HardCap_artefacts/${{ env.BUILD_TYPE }}/VST3/
@@ -143,7 +143,7 @@ jobs:
             libglu1-mesa-dev mesa-common-dev
 
       - name: Cache JUCE checkout
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build-asan/_deps
           key: Linux-juce-9.0.1-asan

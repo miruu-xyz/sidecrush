@@ -333,6 +333,69 @@ void rejectsSillyLayouts()
     CHECK (! p.checkBusesLayoutSupported (monoInStereoOut));
 }
 
+// MIX at 0 has to hand back the input untouched and in time. Anything that
+// forgets the reported latency shows up here as an impulse in the wrong place.
+void dryPathIsAligned()
+{
+    constexpr int blockSize = 512;
+
+    HardCapProcessor p;
+    CHECK (p.setBusesLayout (stereoLayout()));
+    p.prepareToPlay (48000.0, blockSize);
+
+    p.apvts.getParameter ("mix")->setValueNotifyingHost (0.0f);
+
+    // Enough drive and a low enough ceiling that a leaking wet path could not be
+    // mistaken for the dry one.
+    p.apvts.getParameter ("pre")->setValueNotifyingHost (1.0f);
+
+    const auto latency = p.getLatencySamples();
+    CHECK (latency > 0 && latency < blockSize);
+
+    juce::AudioBuffer<float> buffer { 4, blockSize };
+    juce::MidiBuffer midi;
+
+    buffer.clear();
+    buffer.setSample (0, 0, 0.5f);
+    p.processBlock (buffer, midi);
+
+    const auto* out = buffer.getReadPointer (0);
+    CHECK (std::abs (out[latency] - 0.5f) < 1.0e-6f);
+
+    for (int i = 0; i < blockSize; ++i)
+        if (i != latency)
+            CHECK (std::abs (out[i]) < 1.0e-6f);
+}
+
+// OUTPUT is the last thing in the chain, after MIX, so it has to scale the
+// blend and not just the wet half -- otherwise pulling MIX down makes the
+// plugin louder by however much OUT is trimming.
+void outputTrimsTheBlend()
+{
+    constexpr int blockSize = 512;
+
+    HardCapProcessor p;
+    CHECK (p.setBusesLayout (stereoLayout()));
+    p.prepareToPlay (48000.0, blockSize);
+
+    p.apvts.getParameter ("mix")->setValueNotifyingHost (0.0f);
+
+    auto& output = *p.apvts.getParameter ("output");
+    output.setValueNotifyingHost (output.convertTo0to1 (-12.0f));
+
+    const auto latency = p.getLatencySamples();
+
+    juce::AudioBuffer<float> buffer { 4, blockSize };
+    juce::MidiBuffer midi;
+
+    buffer.clear();
+    buffer.setSample (0, 0, 0.5f);
+    p.processBlock (buffer, midi);
+
+    const auto expected = 0.5f * juce::Decibels::decibelsToGain (-12.0f);
+    CHECK (std::abs (buffer.getSample (0, latency) - expected) < 1.0e-6f);
+}
+
 } // namespace
 
 int main()
@@ -348,6 +411,8 @@ int main()
     shortcutsAreExact();
     hqLatencyIsConstant();
     hqSwitchDoesNotClick();
+    dryPathIsAligned();
+    outputTrimsTheBlend();
     statePersists();
     rejectsSillyLayouts();
 

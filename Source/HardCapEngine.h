@@ -193,7 +193,6 @@ private:
 struct Params
 {
     float preGain = 1.0f;      // linear
-    float outGain = 1.0f;      // linear
     float ceilingLin = 0.5f;   // linear amplitude
     float floorLin = 0.0f;     // linear amplitude, forced below ceilingLin
     float shape = 0.0f;        // -1 .. +1
@@ -232,14 +231,21 @@ public:
         setParams (params);
     }
 
+    // The window can never invert: SPEC 2, floor is clamped to ceiling - 1 dB.
+    // The editor draws the same clamp, so it lives here rather than inside
+    // setParams -- two copies of this number would drift apart silently, and the
+    // symptom would be a floor band that does not sit where the floor is.
+    static constexpr float floorHeadroom = 0.891250938f; // -1 dB
+
+    static constexpr float clampFloor (float floorLin, float ceilingLin) noexcept
+    {
+        return std::max (0.0f, std::min (floorLin, ceilingLin * floorHeadroom));
+    }
+
     void setParams (const Params& p)
     {
         params = p;
-
-        // The window can never invert: SPEC 2, floor is clamped to ceiling - 1 dB.
-        constexpr auto oneDbDown = 0.891250938f;
-        params.floorLin = std::min (params.floorLin, params.ceilingLin * oneDbDown);
-        params.floorLin = std::max (params.floorLin, 0.0f);
+        params.floorLin = clampFloor (params.floorLin, params.ceilingLin);
 
         windowScale = 1.0f / std::max (1.0e-9f, params.ceilingLin - params.floorLin);
 
@@ -283,7 +289,9 @@ public:
         const auto shaped = params.clip ? std::clamp (driven, -lid, lid)
                                         : driven * lid;
 
-        return shaped * params.outGain;
+        // OUTPUT is deliberately not here: it is the last thing in the chain,
+        // after MIX, so it has to scale the blend and not just the wet half.
+        return shaped;
     }
 
     float lastLid (int channel) const noexcept { return lids[(size_t) channel]; }

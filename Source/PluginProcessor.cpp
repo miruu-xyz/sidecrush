@@ -3,8 +3,6 @@
 
 // The FILTER sweep tops out at 20 kHz and the top detent is OFF: Nyquist at
 // 48 kHz is 24 kHz, so above ~20 kHz the filter is doing nothing anyway.
-static constexpr float filterOffHz = 20000.0f;
-static constexpr float floorOffDb = -60.0f;
 
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createParameterLayout (
@@ -15,6 +13,32 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     const auto db = [] (float v, int) { return String (v, 1) + " dB"; };
 
+    // CEILING and FLOOR are quoted in dB but the scope plots linear amplitude,
+    // and a dB-linear dial puts almost everything in the top of the sweep: on a
+    // -60..0 range, half amplitude (-6 dB) sits 90 % of the way round, so the
+    // whole lower half of the travel is inaudible fractions. Tapering the dial
+    // to amplitude instead makes the pointer and the band it controls move
+    // together, which is what "feels linear" means here. -100 rather than the
+    // range's own floor is the conversions' minus-infinity, so that the bottom
+    // detent round-trips instead of collapsing to zero.
+    const auto amplitudeTaper = [] (float minDb)
+    {
+        return NormalisableRange<float> { minDb, 0.0f,
+            [] (float lo, float, float norm)
+            {
+                return norm <= 0.0f ? lo : jmax (lo, Decibels::gainToDecibels (norm, -100.0f));
+            },
+            [] (float lo, float, float value)
+            {
+                return value <= lo ? 0.0f
+                                   : jlimit (0.0f, 1.0f, Decibels::decibelsToGain (value, -100.0f));
+            },
+            [] (float lo, float hi, float value)
+            {
+                return jlimit (lo, hi, std::round (value * 10.0f) / 10.0f);
+            } };
+    };
+
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::pre, 1 }, "Pre",
         NormalisableRange<float> { -36.0f, 36.0f, 0.1f }, 0.0f,
@@ -22,14 +46,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::ceiling, 1 }, "Ceiling",
-        NormalisableRange<float> { -60.0f, 0.0f, 0.1f }, -6.0f,
+        amplitudeTaper (-60.0f), -6.0f,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (db)));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::floorDb, 1 }, "Floor",
-        NormalisableRange<float> { floorOffDb, 0.0f, 0.1f }, floorOffDb,
+        amplitudeTaper (floorOffDb), floorOffDb,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (
-            [] (float v, int) { return v <= floorOffDb ? String ("OFF") : String (v, 1) + " dB"; })));
+            // Not "OFF": the floor being at the bottom means the lid starts
+            // moving the instant the sidechain does, and reading OFF next to a
+            // SHAPE dial invites the reading that the shaping is disabled.
+            [] (float v, int) { return v <= floorOffDb ? String ("INSTANT") : String (v, 1) + " dB"; })));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::shape, 1 }, "Shape",
@@ -58,13 +85,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout HardCapProcessor::createPara
 
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::slope, 1 }, "Slope",
-        StringArray { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct",
-                      "30 dB/oct", "36 dB/oct", "42 dB/oct", "48 dB/oct" }, 1));
+        StringArray { "6dB/oct", "12dB/oct", "18dB/oct", "24dB/oct",
+                      "30dB/oct", "36dB/oct", "42dB/oct", "48dB/oct" }, 1));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::output, 1 }, "Output",
         NormalisableRange<float> { -36.0f, 36.0f, 0.1f }, 0.0f,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (db)));
+
+    // Fully wet by default: this is a limiter first, and a parallel one only if
+    // someone asks for it.
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::mix, 1 }, "Mix",
+        NormalisableRange<float> { 0.0f, 100.0f, 1.0f }, 100.0f,
+        AudioParameterFloatAttributes{}.withStringFromValueFunction (
+            [] (float v, int) { return String (roundToInt (v)) + "%"; })));
 
     layout.add (std::make_unique<AudioParameterBool> (
         ParameterID { ids::clip, 1 }, "Clip", true));
@@ -99,7 +134,8 @@ HardCapProcessor::HardCapProcessor()
 
     raw = { get (ids::pre),       get (ids::ceiling),   get (ids::floorDb),
             get (ids::shape),     get (ids::filterHz),  get (ids::slope),
-            get (ids::output),    get (ids::clip),      get (ids::filterPos),
+            get (ids::output),    get (ids::mix),       get (ids::clip),
+            get (ids::filterPos),
             get (ids::scLink),    get (ids::scSource),  get (ids::hq) };
 }
 
@@ -156,6 +192,11 @@ void HardCapProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     ecoPad.prepare (spec);
     ecoPad.reset();
 
+    jassert (hqLatency <= maxWetLatency);
+    mixer.prepare (spec);
+    mixer.setRampLength (juce::Seconds { 0.0 }); // resets, so it has to come first
+    mixer.setWetLatency ((float) hqLatency);
+
     // All of it, not just the gain: a hold left over from a switch that was
     // still in flight when the host re-prepared would duck the first few
     // milliseconds of the new configuration for no reason.
@@ -177,7 +218,6 @@ void HardCapProcessor::pullParameters()
 {
     hardcap::Params p;
     p.preGain = juce::Decibels::decibelsToGain (raw.pre->load());
-    p.outGain = juce::Decibels::decibelsToGain (raw.output->load());
     p.ceilingLin = juce::Decibels::decibelsToGain (raw.ceiling->load());
 
     const auto floorDb = raw.floorDb->load();
@@ -198,8 +238,6 @@ void HardCapProcessor::pullParameters()
     engine.setParams (p);
 
     filterIsPost.store (p.filterPost, std::memory_order_relaxed);
-    ceilingLinear.store (engine.getParams().ceilingLin, std::memory_order_relaxed);
-    floorLinear.store (engine.getParams().floorLin, std::memory_order_relaxed);
 }
 
 void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -224,6 +262,10 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         return;
 
     pullParameters();
+
+    // Before the oversampler, which writes its result back over this same block.
+    mixer.pushDrySamples (juce::dsp::AudioBlock<const float> (main)
+                              .getSubBlock (0, (size_t) numSamples));
 
     // ---- HQ ---------------------------------------------------------------
     // The swap only happens once the duck has reached silence, and only on a
@@ -389,6 +431,18 @@ void HardCapProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     switchGain = gainAfterBlock;
     switchHold = holdAfterBlock;
+
+    // MIX, then OUTPUT. The duck above is there to hide a splice in the
+    // processed path; the dry side has no splice to hide, so it is not ducked.
+    // OUTPUT comes last so it scales the blend rather than only the wet half --
+    // otherwise pulling MIX down would make the plugin louder by whatever OUT
+    // was trimming.
+    auto block = juce::dsp::AudioBlock<float> (main).getSubBlock (0, (size_t) numSamples);
+
+    mixer.setWetMixProportion (raw.mix->load() * 0.01f);
+    mixer.mixWetSamples (block);
+
+    main.applyGain (0, numSamples, juce::Decibels::decibelsToGain (raw.output->load()));
 
     // Now the trace really is what the host receives -- downsampled, padded and
     // ducked, all three of which happened above.
