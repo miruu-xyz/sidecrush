@@ -297,7 +297,17 @@ public:
     Pill scale;
 
 private:
-    Pill link, quality, filterPos, source;
+    Pill link, quality, filterPos, source, wtfInt;
+
+    // WTF's intensity only exists while WTF is selected -- Figma's annotation on
+    // the pill says so, and a dial that does nothing is worse than no dial. It
+    // is hidden rather than dimmed because it shares its row with SCALE, which
+    // simply re-centres; the routing rows above it never reflow.
+    //
+    // A ParameterAttachment rather than the editor's timer, for the reason the
+    // Pill gives: the host can move SC LINK from the audio thread, and this is
+    // the one mechanism that marshals it without allocating per change.
+    juce::ParameterAttachment linkWatch;
 };
 
 //==============================================================================

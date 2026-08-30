@@ -238,6 +238,88 @@ void wtfPansTheCarrier()
     CHECK (wtf.lid > 0.5f);
 }
 
+// WTF at 100% is a claim about what a *mono listener* hears: the two channels
+// come apart, and their sum is what the MONO link would have produced. The
+// engine's own test checks the arithmetic; this checks the plugin actually
+// reaches it -- two parameters have to be read and one branch taken in
+// processBlock for any of it to happen, and the engine test cannot see any of
+// that. Summing after the downsampler is legitimate because every stage between
+// here and the engine is linear.
+void wtfFullIntensitySumsToMono()
+{
+    constexpr int bs = 512;
+
+    const auto run = [] (int link, float intensity)
+    {
+        HardCapProcessor p;
+        CHECK (p.setBusesLayout (stereoLayout()));
+
+        p.prepareToPlay (48000.0, bs);
+        setChoice (p, "sclink", link);
+
+        auto& wtfInt = *p.apvts.getParameter ("wtfint");
+        wtfInt.setValueNotifyingHost (wtfInt.convertTo0to1 (intensity));
+        p.apvts.getParameter ("ceiling")->setValueNotifyingHost (0.5f);
+
+        juce::AudioBuffer<float> buffer { 4, bs };
+        juce::MidiBuffer midi;
+        std::vector<float> sum;
+        int n = 0;
+
+        for (int b = 0; b < 20; ++b)
+        {
+            for (int i = 0; i < bs; ++i, ++n)
+            {
+                const auto at = [n] (double hz)
+                { return (float) std::sin (2.0 * juce::MathConstants<double>::pi * hz * n / 48000.0); };
+
+                // Genuinely different carriers: a mistake that corrected the two
+                // channels by the same signal rather than the same *number*
+                // would still sum correctly if they were identical.
+                buffer.getWritePointer (0)[i] = 0.9f * at (700.0);
+                buffer.getWritePointer (1)[i] = 0.4f * at (1100.0);
+
+                const auto sub = 0.9f * at (40.0);
+                buffer.getWritePointer (2)[i] = sub;
+                buffer.getWritePointer (3)[i] = sub;
+            }
+
+            p.processBlock (buffer, midi);
+
+            if (b < 4) // let the oversamplers fill before measuring
+                continue;
+
+            for (int i = 0; i < bs; ++i)
+                sum.push_back (buffer.getReadPointer (0)[i] + buffer.getReadPointer (1)[i]);
+        }
+
+        return sum;
+    };
+
+    const auto mono = run (sclink::mono, 50.0f); // intensity is inert here
+    const auto full = run (sclink::wtf, 100.0f);
+    const auto half = run (sclink::wtf, 50.0f);
+
+    CHECK (mono.size() == full.size() && mono.size() == half.size());
+
+    auto worstFull = 0.0f;
+    auto worstHalf = 0.0f;
+
+    for (size_t i = 0; i < mono.size(); ++i)
+    {
+        worstFull = juce::jmax (worstFull, std::abs (full[i] - mono[i]));
+        worstHalf = juce::jmax (worstHalf, std::abs (half[i] - mono[i]));
+    }
+
+    // 100% sums to MONO. Not "close to": the only arithmetic between the engine
+    // and here is a linear resampler both runs share.
+    CHECK (worstFull < 1.0e-4f);
+
+    // And the check has teeth: at 50% the same sum is nothing like MONO, which
+    // is the leak into mono that 100% exists to remove.
+    CHECK (worstHalf > 0.1f);
+}
+
 // The cheaper modes are padded so the reported latency never changes. If that
 // padding is wrong the host's delay compensation is wrong, which is worse than
 // the CPU it saves -- so check where an impulse actually comes out in each mode.
@@ -534,6 +616,7 @@ int main()
 
     shortcutsAreExact();
     wtfPansTheCarrier();
+    wtfFullIntensitySumsToMono();
     qualityLatencyIsConstant();
     qualitySwitchDoesNotClick();
     dryPathIsAligned();
