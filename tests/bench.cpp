@@ -1,4 +1,4 @@
-// Throughput benchmark: where does HardCap's CPU actually go?
+// Throughput benchmark: where does SideCrush's CPU actually go?
 // Not a test -- not registered with CTest. Run it by hand.
 
 #include "../Source/PluginProcessor.h"
@@ -63,10 +63,10 @@ void benchOversampler (const char* name, int log2Factor,
 
 void benchEngine (const char* name, int factor)
 {
-    hardcap::Engine engine;
+    sidecrush::Engine engine;
     engine.prepare (sr * factor, 2);
 
-    hardcap::Params p;
+    sidecrush::Params p;
     p.filterHz = 120.0f;
     p.poles = 2;
     engine.setParams (p);
@@ -99,7 +99,7 @@ void measureQualitySwitchGlitch()
     constexpr int totalBlocks = 40;
     constexpr int switchBlock = 20;
 
-    HardCapProcessor proc;
+    SideCrushProcessor proc;
     juce::AudioProcessor::BusesLayout layout;
     layout.inputBuses.add (juce::AudioChannelSet::stereo());
     layout.inputBuses.add (juce::AudioChannelSet::stereo());
@@ -149,7 +149,7 @@ void measureQualitySwitchGlitch()
 void benchWholePlugin (double rate = sr, bool internalSource = false, bool monoLink = false,
                        const char* note = nullptr, int quality = 0)
 {
-    HardCapProcessor proc;
+    SideCrushProcessor proc;
 
     juce::AudioProcessor::BusesLayout layout;
     layout.inputBuses.add (juce::AudioChannelSet::stereo());
@@ -190,7 +190,7 @@ void benchWholePlugin (double rate = sr, bool internalSource = false, bool monoL
 
 int main()
 {
-    std::printf ("HardCap bench -- 48 kHz, %d-sample blocks, stereo\n", blockSize);
+    std::printf ("SideCrush bench -- 48 kHz, %d-sample blocks, stereo\n", blockSize);
     std::printf ("(%% of one core to run in real time; lower is better)\n\n");
 
     std::printf ("Whole plugin, one stereo instance:\n");

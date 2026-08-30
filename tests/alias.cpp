@@ -28,10 +28,10 @@ std::vector<float> runChain (int carrierLog2, int detectorLog2, OS::FilterType t
     const int detectorFactor = 1 << detectorLog2;
     const int blockSize = 512;
 
-    hardcap::Engine engine;
+    sidecrush::Engine engine;
     engine.prepare (sr * detectorFactor, 1);
 
-    hardcap::Params p;
+    sidecrush::Params p;
     p.ceilingLin = 0.25f;
     p.floorLin = 0.0f;
     p.shape = 0.0f;

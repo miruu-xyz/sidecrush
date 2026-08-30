@@ -6,12 +6,12 @@
 #include <numbers>
 #include <vector>
 
-// HardCap DSP core.
+// SideCrush DSP core.
 //
 // Deliberately free of JUCE types so the whole signal path can be exercised by
 // tests/engine_test.cpp without a plugin host. See SPEC.md section 1.
 
-namespace hardcap
+namespace sidecrush
 {
 
 //==============================================================================
@@ -482,4 +482,4 @@ private:
     float midBlend = 0.0f;    // 1 = mid replaced by MONO's, invented side x2
 };
 
-} // namespace hardcap
+} // namespace sidecrush

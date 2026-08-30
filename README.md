@@ -1,8 +1,8 @@
-# HardCap
+# SideCrush
 
 **A sidechain-driven dynamic hard clipper.** VST3, by [miruu](https://github.com/miruu-xyz).
 
-It recreates the crunch that happens when a sub-bass and a distorted signal are summed into a clipper: the sub's peaks push the other signal into the clipping region, where its detail is *flattened* rather than turned down. HardCap does this deliberately, driving a clip ceiling — the lid — from a sidechain signal at waveform rate.
+It recreates the crunch that happens when a sub-bass and a distorted signal are summed into a clipper: the sub's peaks push the other signal into the clipping region, where its detail is *flattened* rather than turned down. SideCrush does this deliberately, driving a clip ceiling — the lid — from a sidechain signal at waveform rate.
 
 Despite the family resemblance, it is not a ring modulator. There is no bipolar multiply and no phase inversion.
 
@@ -67,7 +67,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The VST3 lands in `build/HardCap_artefacts/Release/VST3/`, with a standalone app beside it, and is **copied into your user plug-in folder after every build** so it is immediately loadable in a DAW:
+The VST3 lands in `build/SideCrush_artefacts/Release/VST3/`, with a standalone app beside it, and is **copied into your user plug-in folder after every build** so it is immediately loadable in a DAW:
 
 | | |
 |---|---|
@@ -75,7 +75,7 @@ The VST3 lands in `build/HardCap_artefacts/Release/VST3/`, with a standalone app
 | Windows | `%COMMONPROGRAMFILES%\VST3\` |
 | Linux | `~/.vst3/` |
 
-Pass `-DHARDCAP_COPY_AFTER_BUILD=OFF` to skip it. CI always does.
+Pass `-DSIDECRUSH_COPY_AFTER_BUILD=OFF` to skip it. CI always does.
 
 On macOS, building without full Xcode works — Command Line Tools are enough for VST3 and Standalone.
 
@@ -83,8 +83,8 @@ On macOS, building without full Xcode works — Command Line Tools are enough fo
 
 Two, both plain executables with no framework:
 
-- `hardcap_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, WTF's intensity landing on MONO, the original WTF and an exact mono sum at its three marked settings, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
-- `hardcap_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the five things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that WTF actually drives the two channels apart, that WTF at 100% sums back to exactly the MONO link, that changing quality does not move the reported latency, and that the swap does not click.
+- `sidecrush_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, WTF's intensity landing on MONO, the original WTF and an exact mono sum at its three marked settings, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
+- `sidecrush_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the five things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that WTF actually drives the two channels apart, that WTF at 100% sums back to exactly the MONO link, that changing quality does not move the reported latency, and that the swap does not click.
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
 
@@ -93,23 +93,23 @@ They use a `CHECK` macro rather than `assert`, because `assert` compiles out und
 Two more executables that print numbers rather than pass or fail. They are **not** built by default and are not registered with `ctest`, so CI never links them — build them by hand when you touch the DSP:
 
 ```bash
-cmake --build build --target hardcap_bench hardcap_alias
+cmake --build build --target sidecrush_bench sidecrush_alias
 ```
 
-They land next to the tests, in `build/hardcap_bench_artefacts/<config>/` and `build/hardcap_alias_artefacts/<config>/`.
+They land next to the tests, in `build/sidecrush_bench_artefacts/<config>/` and `build/sidecrush_alias_artefacts/<config>/`.
 
-- `hardcap_bench` — where the CPU goes. Cost per block size and sample rate, each quality mode, each sidechain routing, the cost of each oversampler and of the engine loop on its own, and how far the output steps when quality is changed mid-signal.
-- `hardcap_alias` — what the oversampling buys. Alias floor per factor for the clipper and for the detector, FIR against IIR, and how far the finished output moves if the detector's upsampler is swapped for a cheaper one.
+- `sidecrush_bench` — where the CPU goes. Cost per block size and sample rate, each quality mode, each sidechain routing, the cost of each oversampler and of the engine loop on its own, and how far the output steps when quality is changed mid-signal.
+- `sidecrush_alias` — what the oversampling buys. Alias floor per factor for the clipper and for the detector, FIR against IIR, and how far the finished output moves if the detector's upsampler is swapped for a cheaper one.
 
 Between them they are the evidence for why both paths sit at 8×, why the detector cannot simply run slower, and what each quality mode costs. The constants in `PluginProcessor.h` quote their figures, so if you change the DSP, re-run them and update the comments.
 
 ### Looking at the GUI
 
-`hardcap_shot` renders the editor offscreen to a PNG. It exists because the only other ways to see the interface are a DAW or the Standalone, and the Standalone wrapper opens the default audio input *and* output — which on a laptop can feed back through the monitors. Also not built by default:
+`sidecrush_shot` renders the editor offscreen to a PNG. It exists because the only other ways to see the interface are a DAW or the Standalone, and the Standalone wrapper opens the default audio input *and* output — which on a laptop can feed back through the monitors. Also not built by default:
 
 ```bash
-cmake --build build --target hardcap_shot
-build/hardcap_shot_artefacts/Release/hardcap_shot out.png [args...]
+cmake --build build --target sidecrush_shot
+build/sidecrush_shot_artefacts/Release/sidecrush_shot out.png [args...]
 ```
 
 | argument | effect |

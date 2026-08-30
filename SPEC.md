@@ -1,8 +1,8 @@
-# HardCap — Specification
+# SideCrush — Specification
 
-**HardCap by miruu** — a sidechain-driven dynamic hard clipper.
+**SideCrush by miruu** — a sidechain-driven dynamic hard clipper.
 
-Recreates the crunch that happens when a sub-bass and a distorted signal are summed into a clipper: the sub's peaks push the other signal into the clipping region, where its detail is flattened rather than turned down. HardCap does this deliberately and controllably, driving a clip ceiling ("the lid") from a sidechain signal at waveform rate.
+Recreates the crunch that happens when a sub-bass and a distorted signal are summed into a clipper: the sub's peaks push the other signal into the clipping region, where its detail is flattened rather than turned down. SideCrush does this deliberately and controllably, driving a clip ceiling ("the lid") from a sidechain signal at waveform rate.
 
 Not a ring modulator, despite the original framing. There is no bipolar multiply and no phase inversion.
 
@@ -50,7 +50,7 @@ The CLIP toggle selects between them. `PRE` drives the carrier up into the lid a
 ### Detector notes
 
 - **Rectified**, so a sine sidechain produces two lid closures per cycle — matching a real clipper, which clips both peaks.
-- **No smoothing anywhere after the rectifier.** No attack, no release, no envelope follower, no parameter ramp on the lid. The pre-rectifier lowpass is the only smoothing in the detector, and that is deliberate: smoothing here turns HardCap into a sidechain compressor.
+- **No smoothing anywhere after the rectifier.** No attack, no release, no envelope follower, no parameter ramp on the lid. The pre-rectifier lowpass is the only smoothing in the detector, and that is deliberate: smoothing here turns SideCrush into a sidechain compressor.
 - Even with the lid fully open the plugin still bites, because once `mag >= ceiling` the lid is 0 and the carrier is clamped to silence regardless of its own level.
 
 ### SHAPE
@@ -512,7 +512,7 @@ true — only the curvature between the endpoints is stylised.
 
 The drawn floor is put through the engine's own `clampFloor`, so the band cannot
 be shown above the ceiling when the audio would not allow it. The clamp constant
-lives in `HardCapEngine.h` and is used by both; two copies would drift apart and
+lives in `SideCrushEngine.h` and is used by both; two copies would drift apart and
 the symptom would be a band that does not sit where the floor is.
 
 ---

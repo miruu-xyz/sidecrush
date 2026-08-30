@@ -91,7 +91,7 @@ jobs:
         run: >
           cmake -B build ${{ matrix.generator }}
           -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-          -DHARDCAP_COPY_AFTER_BUILD=OFF
+          -DSIDECRUSH_COPY_AFTER_BUILD=OFF
 
       - name: Build
         run: cmake --build build --config $BUILD_TYPE --parallel 4
@@ -110,7 +110,7 @@ jobs:
       - name: Validate VST3
         shell: bash
         run: |
-          VST3=$(find build -name "HardCap.vst3" | head -1)
+          VST3=$(find build -name "SideCrush.vst3" | head -1)
           echo "validating $VST3"
           case "${{ runner.os }}" in
             macOS)   BIN="pluginval/pluginval.app/Contents/MacOS/pluginval" ;;
@@ -123,8 +123,8 @@ jobs:
       - name: Upload VST3
         uses: actions/upload-artifact@v7
         with:
-          name: HardCap-${{ matrix.name }}
-          path: build/HardCap_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          name: SideCrush-${{ matrix.name }}
+          path: build/SideCrush_artefacts/${{ env.BUILD_TYPE }}/VST3/
 
   sanitizers:
     name: ASan + UBSan
@@ -154,13 +154,13 @@ jobs:
         run: >
           cmake -B build-asan -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DHARDCAP_COPY_AFTER_BUILD=OFF
+          -DSIDECRUSH_COPY_AFTER_BUILD=OFF
           -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
       - name: Build tests
-        run: cmake --build build-asan --parallel 4 --target hardcap_engine_test hardcap_host_test
+        run: cmake --build build-asan --parallel 4 --target sidecrush_engine_test sidecrush_host_test
 
       - name: Run
         env:
