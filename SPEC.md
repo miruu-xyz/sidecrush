@@ -265,9 +265,8 @@ https://www.figma.com/design/Hc5nzirm4UIGqWrgbs5Uy2/Miruu-Plugin-Collection?node
 
 The canvas is **968 x 326** and the editor is laid out against those coordinates
 exactly. It does not reflow: the whole editor carries an affine scale of 75 /
-100 / 125 / 150 %, stored in the plug-in state. The switch lives in the settings
-panel rather than on a background right-click, so that it is reachable without
-knowing it is there.
+100 / 125 / 150 %. The switch lives in the settings panel rather than on a
+background right-click, so that it is reachable without knowing it is there.
 
 Typeface is Zalando Sans Expanded (OFL), embedded from `Resources/fonts/`. Figma
 sizes are em sizes, so they are applied with `withPointHeight`, not `withHeight`.
@@ -301,7 +300,19 @@ three settings worth naming — 0, 50 and 100 % — and dragging it covers
 everything between.
 
 SCALE is a UI preference rather than a plug-in parameter, so it is absent from
-the host's automation list.
+the host's automation list — and it is **global rather than per-instance**. It is
+a property of the screen it is read on, not of the session, so it is stored in
+the user's settings file (`~/Library/Application Support/miruu/SideCrush.settings`
+and the platform equivalents) rather than in the saved state.
+
+Every editor in a process shares one `ScalePreference` through
+`juce::SharedResourcePointer`, and each polls it from the 30 fps timer it is
+already running, so a change made in one window reaches every other open window
+within a frame. Two host processes open at once do not see each other's change:
+the file is read when the first editor in a process opens it, and the next
+process to launch picks it up. The stored value is clamped to the four offered
+steps on read, since the file is user-editable and a scale of 40 would leave the
+editor unreadable with no way back to the switch.
 
 The settings panel is a **swap, not an overlay**: it takes the scope's exact
 bounds (Oscilloscope variant "Variant3").

@@ -78,7 +78,7 @@ Behind the gear in the scope's upper right. The scope swaps out for the panel; t
 | **QUALITY** | **HQ** (8× linear phase), **LQ** (4× minimum phase), or **YUCK** (none at all). |
 | **FILTER PRE / POST** | Rectifier order. PRE filters the still-bipolar sidechain and stays at waveform rate; POST rectifies first and turns the detector into an envelope follower — at which point the FILTER dial reads in milliseconds, because that's what it's become. |
 | **SIGNAL EXT / INT** | External sidechain bus, or the main input driving its own lid. |
-| **SCALE** | UI size, 75…150%. A preference, not a parameter, so it stays out of your host's automation list. |
+| **SCALE** | UI size, 75…150%. Global and remembered: set it once and every SideCrush you open uses it, this session and the next. A preference rather than a parameter, so it stays out of your host's automation list. |
 
 By default everything runs at 8× oversampling, because a hard clip whose threshold moves every sample is about the most alias-prone thing you can build. That does make it a bit of a CPU hog. **LQ** costs about a third of that and **YUCK** about a tenth, and switching between them never changes the plugin's latency, so you can leave it on YUCK while you write and move up when you mix.
 

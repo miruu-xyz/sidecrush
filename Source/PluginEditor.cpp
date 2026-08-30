@@ -35,6 +35,34 @@ namespace
 }
 
 //==============================================================================
+ScalePreference::ScalePreference()
+{
+    juce::PropertiesFile::Options options;
+    options.applicationName     = "SideCrush";
+    options.filenameSuffix      = "settings";
+    options.folderName          = "miruu";
+    options.osxLibrarySubFolder = "Application Support";
+
+    file = std::make_unique<juce::PropertiesFile> (options);
+}
+
+float ScalePreference::get() const
+{
+    // Clamped to the offered steps: the file is user-editable, and a scale of 40
+    // would leave the editor unreadable with no way back to the switch.
+    return juce::jlimit (scaleSteps[0], scaleSteps[std::size (scaleSteps) - 1],
+                         (float) file->getDoubleValue ("uiScale", 1.0));
+}
+
+void ScalePreference::set (float scale)
+{
+    // setValue is a no-op when the value has not changed, so this is safe to
+    // call on every setScale, including the one that applies the stored value.
+    file->setValue ("uiScale", (double) scale);
+    file->saveIfNeeded();
+}
+
+//==============================================================================
 juce::Font uiFont (float pointHeight)
 {
     // ponytail: a function-local static Typeface, released during static
@@ -1260,8 +1288,7 @@ SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
 
     lastFilterPost = proc.filterIsPost.load (std::memory_order_relaxed);
 
-    const auto stored = (float) proc.apvts.state.getProperty ("uiScale", 1.0);
-    setScale (juce::jlimit (0.75f, 1.5f, stored));
+    setScale (scalePref->get());
 
     // One timer for both animated children. 30 is plenty for a scope and costs
     // half of 60; it runs for as long as the editor is open, whether or not the
@@ -1357,7 +1384,7 @@ void SideCrushEditor::addSlider (juce::Slider& slider, juce::Slider::SliderStyle
 void SideCrushEditor::setScale (float scale)
 {
     scaleFactor = scale;
-    proc.apvts.state.setProperty ("uiScale", scale, nullptr);
+    scalePref->set (scale);
 
     setTransform (juce::AffineTransform::scale (scale));
     setSize (designWidth, designHeight);
@@ -1384,6 +1411,15 @@ void SideCrushEditor::refreshFromParameters()
 
 void SideCrushEditor::timerCallback()
 {
+    // Another instance's editor may have moved the shared scale. Polling the
+    // timer that is already running costs one compare a frame and needs no
+    // listener to register, unregister, or outlive.
+    if (const auto scale = scalePref->get(); ! juce::approximatelyEqual (scale, scaleFactor))
+    {
+        setScale (scale);
+        settings.scale.repaint();
+    }
+
     if (scope.isVisible())
         scope.refresh();
 

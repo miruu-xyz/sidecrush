@@ -62,6 +62,28 @@ void paintWordmark (juce::Graphics&, juce::Rectangle<float> panel,
                     juce::Colour dim = uicolour::brandDim);
 
 //==============================================================================
+// The UI scale is one preference for the whole plug-in rather than one per
+// instance: it is a property of the screen it is being read on, not of the
+// session, so it belongs in the user's settings file and not in the saved
+// state. Every editor in the process shares this one object -- held through
+// juce::SharedResourcePointer, so it exists for exactly as long as some editor
+// does -- and each polls it on its own timer, which is how a change made in one
+// window reaches the others.
+//
+// Two processes open at once will not see each other's change: the file is read
+// when the first editor in a process opens it. The next one to launch picks it
+// up.
+struct ScalePreference
+{
+    ScalePreference();
+
+    float get() const;
+    void set (float scale);
+
+    std::unique_ptr<juce::PropertiesFile> file;
+};
+
+//==============================================================================
 class SideCrushLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
@@ -363,6 +385,8 @@ private:
     bool thresholdDrag = false;
     bool shapeDrag = false;
 
+    // Shared with every other open editor, and outlives all of them.
+    juce::SharedResourcePointer<ScalePreference> scalePref;
     float scaleFactor = 1.0f;
 
     // The FILTER readout relabels itself in POST, and nothing else repaints it.
