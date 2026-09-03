@@ -84,12 +84,13 @@ Bipolar. Sets **where along the sidechain's travel the lid breaks**, not what th
 | FILTER | float, Hz | 20 … 20000, then OFF | OFF | logarithmic; OFF is the top detent |
 | SLOPE | choice | 6/12/18/24/30/36/42/48 dB/oct | 12 | 1–8 poles, snapped |
 | OUTPUT | float, dB | −36 … +36 | 0 | same range as PRE |
-| MIX | float, % | 0 … 100 | 100 | parallel blend; the dry side is latency-compensated |
+| MIX | float, % | 0 … 100 | 100 | parallel blend; the dry side is latency-compensated. Under RECTI the travel means something else (see 4.7) |
 | CLIP | bool | off / on | **on** | on = clip ceiling, off = VCA multiply |
 | FILTER POS | choice | PRE / POST | PRE | rectifier order |
 | SC LINK | choice | STEREO / MONO / WTF | STEREO | sidechain detection only; output is always stereo (see 4.5) |
 | WTF | float, % | 0 … 100 | **50** | how far WTF is taken; inert in the other two link modes (see 4.5) |
 | SC SOURCE | choice | EXT / INT | EXT | INT = main input drives its own lid |
+| RECTI | bool | off / on | **off** | clip only the half of the carrier the sidechain's polarity points at, and remap MIX (see 4.7) |
 | QUALITY | choice | HQ / LQ / YUCK | **HQ** | 8x linear phase / 4x minimum phase / 1x unfiltered (see 4.1) |
 
 Notes:
@@ -98,6 +99,8 @@ Notes:
 - **FLOOR at minimum reads INSTANT, not OFF.** Nothing is switched off there: the lid starts moving the moment the sidechain does.
 - **FLOOR is absolute, not relative to CEILING.** Sweeping CEILING does not drag FLOOR with it. FLOOR is internally clamped to `min(floor, ceiling - 0.1 dB)` so the window cannot invert — one step of FLOOR's own 0.1 dB grid, which is as narrow as the two controls can express. The clamp is visible rather than silent: the scope shows the effective window, and the readout brackets the value it is being held at (`- -6.1 dB -`) instead of reporting a number the audio is not using. That text comes from the parameter's own string function, so the host's automation lane shows it too.
 - **WTF rests at 50 %.** Both of the things the dial moves are inactive there, which is what makes 50 % the reference behaviour. It remains a real, automatable parameter in the other two link modes despite doing nothing in them; a parameter that disappears from the host's list when a switch moves is harder to automate than one that is temporarily inert.
+- **RECTI remaps MIX rather than adding a second fader.** Off, MIX is one dry/wet crossfade. On, it is two end to end: dry into the rectified result over the lower half of the travel, that result into the ordinary symmetric one over the upper. 50 % is therefore RECTI's "fully wet", and the fader snaps to it within ±2.5 % while dragging. What you give up while RECTI is on is the plain dry-against-symmetric blend, which is the far ends of the same fader in the other mode.
+- **Toggling RECTI moves MIX.** On sends it to 50 %, off puts back whatever it was before — kept in the plug-in's state tree rather than as a parameter, so it is saved with the session but stays out of the host's automation list.
 - **PRE and OUTPUT share a range**, so the pair reads symmetrically.
 - **MIX is fully wet by default.** Two consequences follow: below 100 % the ceiling is no longer hard, because the dry half is unlimited by definition; and the dry half is not ducked during a QUALITY switch, because the duck exists to hide a splice the dry path does not have.
 - **OUTPUT is last in the chain, after MIX**, so lowering MIX cannot make the plugin louder by however much OUTPUT is cutting.
@@ -120,9 +123,14 @@ Notes:
                         │                                    v         │
                         │                       CLIP ? clamp(x, ±lid)  │
                         │                            : x * lid         │
+                        │                            ^                 │
+                        │            RECTI: two lids ┘ one per half     │
+                        │            wave, crossfaded by MIX's top half │
                         └──────────────────┬───────────────────────────┘
                                            v
  main in ──> delay(latency) ─────────────> MIX ──> OUTPUT ──> main out
+                                        (dry side, and RECTI's
+                                         bottom half, are the same fader)
 ```
 
 Sidechain source and link happen at base rate. Everything from the filter onward runs oversampled — 8x on HQ, 4x on LQ, and not at all on YUCK.
@@ -255,6 +263,29 @@ The scope draws the bipolar detector in PRE, so in WTF its top lobe is the left 
 ### 4.6 Real-time safety
 
 `ScopedNoDenormals` in `processBlock`. No allocation, no locks, no file or GUI access on the audio thread. Scope data crosses to the editor via a lock-free FIFO only. All three oversampler pairs are allocated up front, so the QUALITY switch only changes which pair is addressed.
+
+---
+
+### 4.7 RECTI
+
+The lid stops being one symmetric aperture and becomes two edges. Each is driven by one half-wave of the detector:
+
+```
+top = lid(max(0,  d))       out = CLIP ? clamp(x, -bot, top)
+bot = lid(max(0, -d))            : x * (x > 0 ? top : bot)
+```
+
+So the carrier is clipped only on the side the sidechain's own polarity is currently pointing at, and the other side passes at full amplitude.
+
+**Two lids need two detectors.** In PRE the filter is still looking at a bipolar signal, so the sign survives it and the split costs nothing. In POST the rectifier has already destroyed the sign by the time the filter runs, so the split has to happen *upstream of a filter each* — which is exactly the arrangement 4.5 already built for WTF. Every channel therefore owns two `DetectorFilter`s. The pair is exact: the sections are linear, so `envPos + envNeg` is `filter(|sc|)`, and any mode not using the split gets back the number it always did.
+
+**Consequences.**
+
+- **RECTI is not a limiter.** The unclipped side is untouched, so the ceiling stops holding in one direction — the same admission 4.5 makes about WTF above 50 %.
+- **It prints the sidechain's period onto the carrier.** An asymmetry modulated at the sidechain's own rate is even-harmonic distortion at that rate. With a 50 Hz sidechain in PRE that is the effect. With a slow envelope it is subsonic wander instead, and there is deliberately no DC blocker: a highpass low enough to catch the second case would gut the first.
+- **POST with a long release does very little.** `envPos ≈ envNeg` once the time constant is much longer than the sidechain's period, both lids close by the same amount, and RECTI degenerates back to the symmetric clip. It bites at the fast end of the FILTER sweep and in PRE.
+- **Under WTF** each channel keeps the lid belonging to its own half of the sidechain at every intensity, and its far side is closed only by however much of the split has not been taken. At 0 % both channels hold both lids, which is the ordinary rectified result on a mono sum; at 100 % each holds one. The mid-cancellation still holds exactly, because the correction is defined as a difference of sums and does not care what shape produced them.
+- **On the scope**, the aperture's two edges move apart: the top edge is the left channel's, the bottom the right's, which is the same arrangement 4.5's `On the scope` describes and which draws one symmetric aperture whenever all four numbers agree.
 
 ---
 

@@ -221,7 +221,7 @@ void wtfPansTheCarrier()
         for (auto i = juce::jmax<int64_t> (0, p.scope.head() - bs); i < p.scope.head(); ++i)
         {
             const auto& f = p.scope.at (i);
-            widestLid = juce::jmax (widestLid, std::abs (f.lid - f.lidR));
+            widestLid = juce::jmax (widestLid, std::abs (f.lidTop - f.lidTopR));
         }
 
         return Gaps { widest, widestLid };

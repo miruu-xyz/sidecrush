@@ -196,7 +196,7 @@ private:
 class DialCaption final : public juce::Component
 {
 public:
-    explicit DialCaption (juce::String captionText);
+    explicit DialCaption (juce::String captionText, float fontHeight = 12.0f);
 
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -209,8 +209,14 @@ public:
     std::function<juce::String()> hoverText; // drawn in accent, if set
     std::function<void()> onClick;
 
+    // Set when the caption names a mode that is currently engaged: it stands in
+    // for the caption and reads in the accent tone, so the mode is legible
+    // without hovering. CLIP recolours itself for the same reason.
+    std::function<juce::String()> activeText;
+
 private:
     const juce::String caption;
+    const float fontSize;
     juce::String valueText;
     bool hovered = false;
 };
@@ -319,7 +325,7 @@ public:
     Pill scale;
 
 private:
-    Pill link, quality, filterPos, source, wtfInt;
+    Pill link, quality, filterPos, source, wtfInt, recti;
 
     // WTF's intensity only exists while WTF is selected -- Figma's annotation on
     // the pill says so, and a dial that does nothing is worse than no dial. It
@@ -330,6 +336,25 @@ private:
     // Pill gives: the host can move SC LINK from the audio thread, and this is
     // the one mechanism that marshals it without allocating per change.
     juce::ParameterAttachment linkWatch;
+};
+
+//==============================================================================
+// MIX's midpoint is the whole rectified signal, and under RECTI it is the only
+// point on the fader with a name rather than a proportion -- so it catches
+// under the cursor. Off, and anywhere but right beside it, the fader is
+// ordinary: this is a detent, not a step.
+class SnappingSlider final : public juce::Slider
+{
+public:
+    std::function<bool()> snapActive;
+
+    double snapValue (double attempted, DragMode mode) override
+    {
+        if (mode == notDragging || snapActive == nullptr || ! snapActive())
+            return attempted;
+
+        return std::abs (attempted - 50.0) <= 2.5 ? 50.0 : attempted;
+    }
 };
 
 //==============================================================================
@@ -370,11 +395,12 @@ private:
     SideCrushProcessor& proc;
     SideCrushLookAndFeel lookAndFeel;
 
-    juce::Slider preSlider, outputSlider, mixSlider, ceilingKnob, filterKnob, shapeKnob;
+    juce::Slider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
+    SnappingSlider mixSlider;
     std::unique_ptr<SliderAttachment> preAtt, outputAtt, mixAtt, ceilingAtt, filterAtt, shapeAtt;
 
     Pill slopePill, floorPill, clipPill;
-    DialCaption filterCaption, shapeCaption;
+    DialCaption filterCaption, shapeCaption, mixCaption;
     IconButton gear, close;
     ActivityLed led;
     ScopeComponent scope;
@@ -391,6 +417,11 @@ private:
 
     // The FILTER readout relabels itself in POST, and nothing else repaints it.
     bool lastFilterPost = false;
+
+    // MIX's readout names its two components under RECTI and reads a plain
+    // percentage otherwise, so flipping the mode is what rebuilds its text --
+    // the same arrangement, for the same reason, as the flag above it.
+    bool lastRecti = false;
 
     // The FLOOR readout brackets its value once the ceiling is holding it down,
     // so it repaints when the *ceiling* moves. Starts outside the range, so the

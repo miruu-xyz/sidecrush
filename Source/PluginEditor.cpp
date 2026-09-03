@@ -32,6 +32,41 @@ namespace
                                     pick (choice - 1);
                             });
     }
+
+    // RECTI's switch, shared by the settings pill and the MIX caption -- one
+    // switch in two places, and it moves two parameters either way.
+    //
+    // MIX's midpoint is RECTI's "fully processed" the way the top of the travel
+    // is the symmetric mode's, so turning it on puts the fader where this mode's
+    // own full effect is rather than leaving it pointing at a blend that has
+    // just changed meaning underneath it. Turning it off puts back whatever the
+    // fader was doing before, which is kept in the plug-in's state tree: not a
+    // parameter, so it stays out of the host's automation list, but saved with
+    // the session, so reloading does not forget.
+    void toggleRecti (SideCrushProcessor& p)
+    {
+        static constexpr auto stash = "mixBeforeRecti";
+
+        auto& flag = *p.apvts.getParameter (ids::recti);
+        auto& mix = *p.apvts.getParameter (ids::mix);
+
+        const auto turningOn = flag.getValue() <= 0.5f;
+        const auto current = mix.convertFrom0to1 (mix.getValue());
+
+        if (turningOn)
+            p.apvts.state.setProperty (stash, current, nullptr);
+
+        const auto wanted = turningOn ? 50.0f
+                                      : (float) p.apvts.state.getProperty (stash, 100.0);
+
+        flag.beginChangeGesture();
+        flag.setValueNotifyingHost (turningOn ? 1.0f : 0.0f);
+        flag.endChangeGesture();
+
+        mix.beginChangeGesture();
+        mix.setValueNotifyingHost (mix.convertTo0to1 (wanted));
+        mix.endChangeGesture();
+    }
 }
 
 //==============================================================================
@@ -427,14 +462,15 @@ void Pill::mouseUp (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-DialCaption::DialCaption (juce::String captionText) : caption (std::move (captionText))
+DialCaption::DialCaption (juce::String captionText, float fontHeight)
+    : caption (std::move (captionText)), fontSize (fontHeight)
 {
     setComponentID (caption.toLowerCase());
 }
 
 void DialCaption::paint (juce::Graphics& g)
 {
-    g.setFont (uiFont (12.0f));
+    g.setFont (uiFont (fontSize));
 
     // Dragging wins over hovering: if the dial is moving, its number is the only
     // thing worth saying.
@@ -446,9 +482,12 @@ void DialCaption::paint (juce::Graphics& g)
     }
 
     const auto showHover = hovered && hoverText != nullptr;
+    const auto active = activeText != nullptr ? activeText() : juce::String();
 
-    g.setColour (showHover ? uicolour::accent : uicolour::label);
-    g.drawText (showHover ? hoverText() : caption, getLocalBounds(), juce::Justification::centred);
+    const auto text = showHover ? hoverText() : active.isNotEmpty() ? active : caption;
+
+    g.setColour (showHover || active.isNotEmpty() ? uicolour::accent : uicolour::label);
+    g.drawText (text, getLocalBounds(), juce::Justification::centred);
 }
 
 void DialCaption::setValueText (juce::String text)
@@ -981,13 +1020,18 @@ void ScopeComponent::paint (juce::Graphics& g)
                 // frame, so the cap visibly closes in from top and bottom.
                 g.setGradientFill ({ juce::Colours::white.withAlpha (0.0f), centreX, bounds.getY(),
                                      juce::Colours::white.withAlpha (0.08f), centreX, mid, false });
-                g.fillPath (closeOnto (buildTrace ([] (const ScopeFrame& f) { return f.lid; }),
+                g.fillPath (closeOnto (buildTrace ([] (const ScopeFrame& f) { return f.lidTop; }),
                                        bounds.getY()));
 
                 g.setGradientFill ({ juce::Colours::white.withAlpha (0.08f), centreX, mid,
                                      juce::Colours::white.withAlpha (0.0f), centreX, bounds.getBottom(), false });
+                // Top edge from the left channel, bottom from the right: in WTF
+                // those are the two halves of the split, and under RECTI each is
+                // already the edge that half of the sidechain is closing. Every
+                // other mode has all four the same number, so this draws the one
+                // symmetric aperture it always did.
                 g.fillPath (closeOnto (buildTrace ([wtf] (const ScopeFrame& f)
-                                                   { return -(wtf ? f.lidR : f.lid); }),
+                                                   { return -(wtf ? f.lidBotR : f.lidBot); }),
                                        bounds.getBottom()));
 
                 strokeOutput (1.0f);
@@ -1029,6 +1073,7 @@ SettingsPanel::SettingsPanel (SideCrushProcessor& p)
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
       source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL"),
       wtfInt (p, ids::wtfInt, Pill::Gesture::drag, "WTF"),
+      recti (p, ids::recti, Pill::Gesture::cycle, "MIX"),
       linkWatch (*p.apvts.getParameter (ids::scLink),
                  [this] (float value)
                  {
@@ -1057,6 +1102,17 @@ SettingsPanel::SettingsPanel (SideCrushProcessor& p)
 
     scale.setComponentID ("scale");
 
+    // The parameter is a bool, and "On"/"Off" says nothing about what is on --
+    // the two states are two different meanings for the MIX fader, so they are
+    // named after those. The click is the editor's: it moves MIX as well.
+    recti.onClick = [&p] { toggleRecti (p); };
+
+    recti.overrideText = [&p]
+    {
+        return juce::String (p.apvts.getRawParameterValue (ids::recti)->load() > 0.5f
+                                 ? "RECTI" : "NORMAL");
+    };
+
     // A continuous dial has no choice list to right-click, so it gets the three
     // settings that are worth naming -- the two ends and the original behaviour
     // in the middle. Straight from the design's annotation on this pill.
@@ -1079,7 +1135,7 @@ SettingsPanel::SettingsPanel (SideCrushProcessor& p)
                       });
     };
 
-    for (auto* pill : { &link, &quality, &filterPos, &source, &scale, &wtfInt })
+    for (auto* pill : { &link, &quality, &filterPos, &source, &scale, &wtfInt, &recti })
         addAndMakeVisible (pill);
 
     linkWatch.sendInitialUpdate();
@@ -1108,15 +1164,17 @@ void SettingsPanel::resized()
             b->setBounds (centreX - total / 2 + aWidth + 8, y, bWidth, 21);
     };
 
-    // Two rows of routing, then a third for the two dials that are not routing
-    // at all. WTF joins SCALE there rather than the link it belongs to, because
-    // it is an amount and everything on the rows above is a switch.
-    // The three rows are one evenly-spaced block, centred: 21 tall each, 8
-    // apart. SCALE used to sit below a wider gap and the block was 87 tall; the
-    // updated frame spaces all three the same, so it is 79 and every row moves.
-    row (link, 80, &quality, 43, centreY - 40);
-    row (filterPos, 101, &source, 107, centreY - 11);
-    row (scale, 113, wtfInt.isVisible() ? &wtfInt : nullptr, 90, centreY + 18);
+    // Two rows of routing, then MIX's own mode, then a fourth for the two dials
+    // that are not routing at all. WTF joins SCALE there rather than the link it
+    // belongs to, because it is an amount and everything on the rows above is a
+    // switch; RECTI sits apart from both because it is neither -- it changes
+    // what the MIX fader on the front panel means.
+    // The rows are one evenly-spaced block, centred: 21 tall each, 8 apart, so
+    // four of them come to 108.
+    row (link, 80, &quality, 43, centreY - 54);
+    row (filterPos, 101, &source, 107, centreY - 25);
+    row (recti, 110, nullptr, 0, centreY + 4);
+    row (scale, 113, wtfInt.isVisible() ? &wtfInt : nullptr, 90, centreY + 33);
 }
 
 //==============================================================================
@@ -1126,6 +1184,7 @@ SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
       floorPill (p, ids::floorDb, Pill::Gesture::drag),
       clipPill  (p, ids::clip,    Pill::Gesture::cycle),
       filterCaption ("FILTER"), shapeCaption ("SHAPE"),
+      mixCaption ("MIX", 16.0f),
       gear  (BinaryData::settings_svg, BinaryData::settings_svgSize),
       close (BinaryData::close_svg,    BinaryData::close_svgSize),
       led (p), scope (p), settings (p)
@@ -1192,6 +1251,23 @@ SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
         param.setValueNotifyingHost (param.getValue() > 0.5f ? 0.0f : 1.0f);
         param.endChangeGesture();
     };
+
+    // The MIX caption is a switch as well as a label -- the same one the
+    // settings panel carries, because RECTI is a property of this fader and
+    // reaching for the gear to change what the fader under your cursor means is
+    // a detour. Engaged, it reads its own name in accent; hovering shows the
+    // mode a click would leave you in, which is the half FILTER's caption gets
+    // for free by having two names to alternate.
+    const auto rectiOn = [this]
+    {
+        return proc.apvts.getRawParameterValue (ids::recti)->load() > 0.5f;
+    };
+
+    mixCaption.activeText = [rectiOn] { return juce::String (rectiOn() ? "RECTI" : ""); };
+    mixCaption.hoverText = [rectiOn] { return juce::String (rectiOn() ? "MIX" : "RECTI"); };
+    mixCaption.onClick = [this] { toggleRecti (proc); };
+
+    mixSlider.snapActive = rectiOn;
 
     // SHAPE's caption only ever reports; letting it take clicks would steal them
     // from the dial whose padded bounds it sits inside.
@@ -1282,11 +1358,13 @@ SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
     // After the dials, so they win the clicks inside the dials' padded bounds.
     addAndMakeVisible (filterCaption);
     addAndMakeVisible (shapeCaption);
+    addAndMakeVisible (mixCaption);
 
     gear.onClick = [this] { showSettings (true); };
     close.onClick = [this] { showSettings (false); };
 
     lastFilterPost = proc.filterIsPost.load (std::memory_order_relaxed);
+    lastRecti = proc.rectiIsOn.load (std::memory_order_relaxed);
 
     setScale (scalePref->get());
 
@@ -1401,7 +1479,8 @@ void SideCrushEditor::showSettings (bool shouldShow)
 
 void SideCrushEditor::refreshFromParameters()
 {
-    for (auto* slider : { &preSlider, &outputSlider, &mixSlider, &ceilingKnob, &filterKnob, &shapeKnob })
+    for (juce::Slider* slider : std::initializer_list<juce::Slider*> {
+             &preSlider, &outputSlider, &mixSlider, &ceilingKnob, &filterKnob, &shapeKnob })
         slider->updateText();
 
     updateScopeOverlay();
@@ -1435,6 +1514,19 @@ void SideCrushEditor::timerCallback()
         lastFilterPost = post;
         proc.filterIsPost.store (post, std::memory_order_relaxed);
         filterKnob.updateText();
+    }
+
+    // MIX's readout names its two components under RECTI and reads a plain
+    // percentage otherwise, so the mode flipping is what rebuilds it. Written
+    // from here as well as from the audio thread, for the reason above: same
+    // value either way, and this path still works in a host that is idle.
+    if (const auto recti = proc.apvts.getRawParameterValue (ids::recti)->load() > 0.5f;
+        recti != lastRecti)
+    {
+        lastRecti = recti;
+        proc.rectiIsOn.store (recti, std::memory_order_relaxed);
+        mixSlider.updateText();
+        mixCaption.repaint();
     }
 
     // The FLOOR readout brackets its value while the ceiling is holding it down,
@@ -1481,7 +1573,6 @@ void SideCrushEditor::paint (juce::Graphics& g)
     g.setColour (uicolour::label);
     g.drawText ("PRE",     juce::Rectangle<int> {  48, 48, 42, 19 }, juce::Justification::centred);
     g.drawText ("CEILING", juce::Rectangle<int> { 164, 48, 77, 19 }, juce::Justification::centred);
-    g.drawText ("MIX",     juce::Rectangle<int> { 878, 48, 42, 19 }, juce::Justification::centred);
     g.drawText ("OUT",     juce::Rectangle<int> { 966, 48, 42, 19 }, juce::Justification::centred);
 }
 
@@ -1504,6 +1595,10 @@ void SideCrushEditor::resized()
     // "12.50 kHz" once their dial is moving. Both stay centred on their dial.
     filterCaption.setBounds ( 325, 137,  68, 13);
     shapeCaption.setBounds  ( 324, 176,  70, 13);
+
+    // Wider than the design's 42, for the reason the two above are: "RECTI" at
+    // 16pt does not fit the word it replaces. Still centred on the fader.
+    mixCaption.setBounds    ( 859,  48,  80, 19);
 
     slopePill.setBounds    ( 313,  48,  92,  21);
     floorPill.setBounds    ( 313, 257,  92,  21);

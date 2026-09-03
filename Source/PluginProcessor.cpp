@@ -6,7 +6,7 @@
 
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout SideCrushProcessor::createParameterLayout (
-    std::atomic<bool>* filterIsPostFlag)
+    std::atomic<bool>* filterIsPostFlag, std::atomic<bool>* rectiFlag)
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
@@ -116,11 +116,31 @@ juce::AudioProcessorValueTreeState::ParameterLayout SideCrushProcessor::createPa
 
     // Fully wet by default: this is a limiter first, and a parallel one only if
     // someone asks for it.
+    //
+    // Under RECTI the fader is two crossfades end to end rather than one -- dry
+    // against the rectified result up to the midpoint, that result against the
+    // symmetric one after it -- so 100% wet is no longer at the top of the
+    // travel and a plain percentage would be naming the wrong thing. Both
+    // components present get named instead, and whichever is at zero is dropped,
+    // which keeps the longest reading at seven characters: "50D/50R".
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::mix, 1 }, "Mix",
         NormalisableRange<float> { 0.0f, 100.0f, 1.0f }, 100.0f,
         AudioParameterFloatAttributes{}.withStringFromValueFunction (
-            [] (float v, int) { return String (roundToInt (v)) + "%"; })));
+            [rectiFlag] (float v, int)
+            {
+                const auto pct = roundToInt (v);
+
+                if (! rectiFlag->load (std::memory_order_relaxed))
+                    return String (pct) + "%";
+
+                if (pct == 0)   return String ("100D");
+                if (pct == 50)  return String ("100R");
+                if (pct == 100) return String ("100W");
+
+                return pct < 50 ? String (100 - pct * 2) + "D/" + String (pct * 2) + "R"
+                                : String (200 - pct * 2) + "R/" + String (pct * 2 - 100) + "W";
+            })));
 
     layout.add (std::make_unique<AudioParameterBool> (
         ParameterID { ids::clip, 1 }, "Clip", true));
@@ -159,6 +179,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SideCrushProcessor::createPa
         ParameterID { ids::scSource, 1 }, "Sidechain Source",
         StringArray { "EXT", "INT" }, 0));
 
+    // RECTI. The lid stops being one symmetric aperture and becomes two edges,
+    // each driven by one half of the sidechain, so the carrier is only clipped
+    // on the side the sidechain's own polarity points at. Off by default: it
+    // gives up the ceiling in one direction, which is not what a limiter should
+    // do unless it was asked to. See SPEC 4.7.
+    layout.add (std::make_unique<AudioParameterBool> (
+        ParameterID { ids::recti, 1 }, "Recti Mix", false));
+
     // HQ first: nobody should have to find a button to get the good version.
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::quality, 1 }, "Quality",
@@ -181,7 +209,7 @@ SideCrushProcessor::SideCrushProcessor()
             get (ids::output),    get (ids::mix),       get (ids::clip),
             get (ids::filterPos),
             get (ids::scLink),    get (ids::wtfInt),
-            get (ids::scSource),  get (ids::quality) };
+            get (ids::scSource),  get (ids::quality),   get (ids::recti) };
 }
 
 bool SideCrushProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -288,12 +316,21 @@ void SideCrushProcessor::pullParameters()
     p.wtf = (int) raw.scLink->load() == sclink::wtf;
     p.wtfIntensity = raw.wtfInt->load() * 0.01f;
 
+    // MIX's upper half. Under RECTI the fader crosses dry into the rectified
+    // result over its lower half and the rectified result into the symmetric one
+    // over its upper -- the same two-halves split wtfIntensity uses one screen
+    // up, for the same reason: one fader, two things to say with it. The lower
+    // half is the dry/wet mixer's own business, in processBlock.
+    p.recti = raw.recti->load() > 0.5f;
+    p.rectiBlend = juce::jmax (0.0f, raw.mix->load() * 0.02f - 1.0f);
+
     // Applied every block, no smoothing and no change detection -- SPEC 2. The
     // only part worth guarding is the filter's tan and sins, and DetectorFilter
     // guards that itself.
     engine.setParams (p);
 
     filterIsPost.store (p.filterPost, std::memory_order_relaxed);
+    rectiIsOn.store (p.recti, std::memory_order_relaxed);
 }
 
 void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -429,8 +466,10 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             detectorPtr[ch] = osDetector.getChannelPointer ((size_t) (sharedDetector ? 0 : ch));
     }
 
-    auto lidMin = 1.0f;
-    auto lidMinR = 1.0f;
+    // One running minimum per aperture edge. Under RECTI the two edges of a
+    // channel move independently, and taking the tighter of the two for both
+    // would draw a symmetric aperture the audio is not using.
+    auto topMin = 1.0f, botMin = 1.0f, topMinR = 1.0f, botMinR = 1.0f;
     auto blockLidMin = 1.0f;
     const auto channels = juce::jmin (numCh, 2);
 
@@ -453,11 +492,19 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             for (int ch = 0; ch < channels; ++ch)
                 carrierPtr[ch][i] = engine.processSample (ch, carrierPtr[ch][i], detectorPtr[ch][i]);
 
-        const auto lid = engine.lastLid (0);
-        const auto lidR = stereoLids ? engine.lastLid (1) : lid;
-        lidMin = juce::jmin (lidMin, lid);
-        lidMinR = juce::jmin (lidMinR, lidR);
-        blockLidMin = juce::jmin (blockLidMin, lid, lidR);
+        const auto top = engine.lastLidTop (0);
+        const auto bot = engine.lastLidBot (0);
+        const auto topR = stereoLids ? engine.lastLidTop (1) : top;
+        const auto botR = stereoLids ? engine.lastLidBot (1) : bot;
+
+        topMin = juce::jmin (topMin, top);
+        botMin = juce::jmin (botMin, bot);
+        topMinR = juce::jmin (topMinR, topR);
+        botMinR = juce::jmin (botMinR, botR);
+
+        // The meter still reports one number, and the tighter edge is the one
+        // that is actually reducing anything.
+        blockLidMin = juce::jmin (blockLidMin, juce::jmin (top, bot), juce::jmin (topR, botR));
 
         // One scope frame per base-rate sample, taking the most closed lid of
         // the group so the aperture never looks wider than it really was. `out`
@@ -466,10 +513,9 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         // and draw aliasing the real output does not have.
         if ((i % (size_t) factor) == (size_t) factor - 1)
         {
-            pendingScope[i / (size_t) factor] = { engine.lastDetector (0), lidMin, 0.0f,
-                                                  lidMinR, 0.0f };
-            lidMin = 1.0f;
-            lidMinR = 1.0f;
+            pendingScope[i / (size_t) factor] = { engine.lastDetector (0), topMin, botMin,
+                                                  0.0f, topMinR, botMinR, 0.0f };
+            topMin = botMin = topMinR = botMinR = 1.0f;
         }
     }
 
@@ -517,7 +563,13 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     // was trimming.
     auto block = juce::dsp::AudioBlock<float> (main).getSubBlock (0, (size_t) numSamples);
 
-    mixer.setWetMixProportion (raw.mix->load() * 0.01f);
+    // Under RECTI the dry side is gone by the midpoint -- everything above it is
+    // one processed signal against another, and the engine has already blended
+    // those two. So the dry crossfade runs out over the lower half of the travel
+    // and then holds.
+    const auto mixNorm = raw.mix->load() * 0.01f;
+    mixer.setWetMixProportion (engine.getParams().recti ? juce::jmin (1.0f, mixNorm * 2.0f)
+                                                        : mixNorm);
     mixer.mixWetSamples (block);
 
     main.applyGain (0, numSamples, juce::Decibels::decibelsToGain (raw.output->load()));

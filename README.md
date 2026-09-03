@@ -63,7 +63,7 @@ SideCrush is a stereo (or mono) effect with a stereo sidechain input. Route the 
 | **SHAPE** | Bipolar, −1…+1. Where in that window the lid breaks: late and gentle at CEILING (−1), linear (0), or immediately and hard at FLOOR (+1). |
 | **FILTER** | Lowpass on the detector, 20 Hz…20 kHz, then an OFF detent at the top. Click the caption underneath to flip the detector between PRE and POST. |
 | **SLOPE** | 6…48 dB/oct, click for the menu. With the filter off it sweeps the cutoff instead, and picking a slope brings the filter back in at 160 Hz. |
-| **MIX** | Dry/wet, 0…100%. Latency-compensated, so parallel crushing doesn't comb. |
+| **MIX** | Dry/wet, 0…100%. Latency-compensated, so parallel crushing doesn't comb. Click the word **MIX** above it to switch it into RECTI, where the same fader means something else. |
 | **OUT** | Output gain, −36…+36 dB. |
 | **CLIP** | Clip ceiling (lit red), or plain VCA ducking (dark). |
 
@@ -78,6 +78,7 @@ Behind the gear in the scope's upper right. The scope swaps out for the panel; t
 | **QUALITY** | **HQ** (8× linear phase), **LQ** (4× minimum phase), or **YUCK** (none at all). |
 | **FILTER PRE / POST** | Rectifier order. PRE filters the still-bipolar sidechain and stays at waveform rate; POST rectifies first and turns the detector into an envelope follower — at which point the FILTER dial reads in milliseconds, because that's what it's become. |
 | **SIGNAL EXT / INT** | External sidechain bus, or the main input driving its own lid. |
+| **MIX NORMAL / RECTI** | What the MIX fader means. NORMAL is dry against wet. RECTI clips only the half of the waveform the sidechain's polarity is pointing at, and remaps the fader to dry → rectified → ordinary wet. Same switch as clicking the MIX caption on the front panel. |
 | **SCALE** | UI size, 75…150%. Global and remembered: set it once and every SideCrush you open uses it, this session and the next. A preference rather than a parameter, so it stays out of your host's automation list. |
 
 By default everything runs at 8× oversampling, because a hard clip whose threshold moves every sample is about the most alias-prone thing you can build. That does make it a bit of a CPU hog. **LQ** costs about a third of that and **YUCK** about a tenth, and switching between them never changes the plugin's latency, so you can leave it on YUCK while you write and move up when you mix.
@@ -91,6 +92,10 @@ The numbers, and why both the clipper and the detector have to run oversampled, 
 **QUALITY is a sound, not just a CPU setting.** YUCK turns the anti-aliasing off entirely and lets the moving clip fold its own harmonics back down the spectrum. On something clean that's ugly. On something already filthy it's free grit — and a tenth of the CPU.
 
 **SIGNAL INT** points the plugin at itself: the input drives its own lid, so it stops being a sidechain trick and becomes a distortion. A low FILTER lets the signal's own bottom end modulate everything above it; FILTER off lets the whole thing modulate itself. No routing required, so it's the fastest way to hear what this does.
+
+**RECTI** clips one side of the waveform at a time. A positive peak in the sidechain squashes the top of your carrier and leaves the bottom alone; a negative peak does the opposite. The asymmetry flips at the sidechain's own rate, which prints the sidechain's period onto the carrier as even harmonics — a kick doesn't just duck the track, it stamps its pitch into it. It also stops being a limiter, because the side that isn't being clipped passes at full height.
+
+Turning it on moves the MIX fader to 50% and changes what the fader means: **0** is dry, **50** is the whole rectified signal, **100** is the ordinary symmetric clip. The readout says which two you're between — `100D`, `50D/50R`, `100R`, `50R/50W`, `100W` — and the fader catches at the midpoint on the way past. Turn it off and MIX goes back to whatever it was. Loudest in PRE, or POST with a short release; a long release settles both halves onto the same envelope and it fades back into an ordinary clip. [SPEC §4.7](SPEC.md).
 
 **WTF** splits the sidechain by sign and hands one half to each channel — positive peaks clip the left, negative peaks the right. The two clippers take turns and the sound appears to move, which is a pan that no gain law can make. The dial beside it says how far to take that: 0% is MONO, 50% is the default, and 100% trades the movement for exact phase cancellation, so a mono listener hears the same thing the room does. Right-click it for those three by name. [SPEC §4.5](SPEC.md) has the whole argument.
 
@@ -122,7 +127,7 @@ On macOS the build produces a universal arm64 + x86-64 binary, because Ableton L
 
 Two, both plain executables with no framework, both run by `ctest`:
 
-- `sidecrush_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, WTF's intensity landing on MONO, the original WTF and an exact mono sum at its three marked settings, that the widening leaves an already-stereo input alone, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
+- `sidecrush_engine_test` — the DSP core in isolation. Asserts the window endpoints, the SHAPE curve, filter stability at 20 Hz with 8 poles, WTF's intensity landing on MONO, the original WTF and an exact mono sum at its three marked settings, that the widening leaves an already-stereo input alone, RECTI clipping one side while the other passes untouched, that the top of MIX's travel and RECTI switched off are both the symmetric result exactly, that RECTI survives WTF's mono cancellation, and the claim the whole plugin rests on: that a clamp flattens where a multiply scales.
 - `sidecrush_host_test` — instantiates the real `AudioProcessor` and pushes audio through it across five bus layouts and three sample rates, checking for NaN and verifying state round-trips. It also guards the things most likely to break silently: that the detector's routing shortcuts are bit-identical to the long way round, that WTF actually drives the two channels apart, that WTF at 100% sums back to exactly the MONO link, that changing quality doesn't move the reported latency, that the swap doesn't click, that MIX's dry path is aligned to the reported latency, that OUT trims the blend rather than the wet half, and that FLOOR reads back as capped when CEILING is holding it down.
 
 They use a `CHECK` macro rather than `assert`, because `assert` compiles out under `NDEBUG` and a self-check that vanishes in Release is worse than none.
