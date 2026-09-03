@@ -368,12 +368,13 @@ public:
         detectors[(size_t) channel] = params.wtf && params.filterPost ? symMag : d.trace;
 
         const auto sym = lidFor (symMag);
-        setLids (channel, sym, lidFor (topMag), lidFor (botMag));
+        const auto top = lidFor (topMag);
+        const auto bot = lidFor (botMag);
+        setLids (channel, sym, top, bot);
 
         // OUTPUT is deliberately not here: it is the last thing in the chain,
         // after MIX, so it has to scale the blend and not just the wet half.
-        return shapedRecti (carrier * params.preGain, sym,
-                            lidsTop[(size_t) channel], lidsBot[(size_t) channel]);
+        return shapedRecti (carrier * params.preGain, sym, top, bot);
     }
 
     // One sample of both channels, WTF only. The two channels stop being
@@ -415,14 +416,19 @@ public:
         // split has not been taken yet. At 0% both channels hold both lids, which
         // is the ordinary rectified result on a mono sum; at 100% each holds one
         // and the other stands wide open.
-        setLids (0, lidL, lidFor (hPos), lidFor (blend * hNeg));
-        setLids (1, lidR, lidFor (blend * hPos), lidFor (hNeg));
+        const auto topL = lidFor (hPos);
+        const auto botL = lidFor (blend * hNeg);
+        const auto topR = lidFor (blend * hPos);
+        const auto botR = lidFor (hNeg);
+
+        setLids (0, lidL, topL, botL);
+        setLids (1, lidR, topR, botR);
 
         const auto drivenL = left * params.preGain;
         const auto drivenR = right * params.preGain;
 
-        auto outL = shapedRecti (drivenL, lidL, lidsTop[0], lidsBot[0]);
-        auto outR = shapedRecti (drivenR, lidR, lidsTop[1], lidsBot[1]);
+        auto outL = shapedRecti (drivenL, lidL, topL, botL);
+        auto outR = shapedRecti (drivenR, lidR, topR, botR);
 
         // Above 50% the pair is slid until its mid is the mono result. What is
         // left between the channels is untouched, so the difference the split
@@ -502,12 +508,19 @@ private:
         return shapeTable.lid (std::clamp ((mag - params.floorLin) * windowScale, 0.0f, 1.0f));
     }
 
-    // Outside RCTF the two lids are one number, and storing it twice is what
-    // keeps every reader -- the meter, the scope, the shaper -- on one path.
+    // The aperture as it is to be *drawn*, which is not the pair the shaper
+    // clips against: what leaves this plug-in is a crossfade of two shapes, so
+    // the mask has to follow the fader that crossfades them. Over MIX's upper
+    // half the two edges slide back onto the symmetric lid, which is the shape
+    // taking over. The lower half is the dry blend and is applied downstream,
+    // where the proportion the mixer is using is already known.
+    //
+    // Outside RCTF the two edges are one number, and storing it twice is what
+    // keeps every reader -- the meter, the scope -- on one path.
     void setLids (int channel, float sym, float top, float bot) noexcept
     {
-        lidsTop[(size_t) channel] = params.recti ? top : sym;
-        lidsBot[(size_t) channel] = params.recti ? bot : sym;
+        lidsTop[(size_t) channel] = params.recti ? top + params.rectiBlend * (sym - top) : sym;
+        lidsBot[(size_t) channel] = params.recti ? bot + params.rectiBlend * (sym - bot) : sym;
     }
 
     // The lid applied to an already-driven carrier: a wall, or a gain.

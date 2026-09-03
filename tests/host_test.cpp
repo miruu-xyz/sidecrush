@@ -466,6 +466,72 @@ void qualitySwitchDoesNotClick()
     CHECK (seam < steady * 2.0f);
 }
 
+// The scope's mask is a reading of the *output*, so it has to follow MIX: below
+// full wet the dry half it is blended with was never clipped, and a mask still
+// clamped to the lid would be drawing a signal the plug-in did not produce.
+void apertureFollowsMix()
+{
+    constexpr int bs = 512;
+
+    const auto tightestEdge = [] (bool recti, float mixPercent)
+    {
+        SideCrushProcessor p;
+        CHECK (p.setBusesLayout (stereoLayout()));
+
+        p.prepareToPlay (48000.0, bs);
+        p.apvts.getParameter ("ceiling")->setValueNotifyingHost (0.35f);
+        setChoice (p, "recti", recti ? 1 : 0);
+        p.apvts.getParameter ("mix")->setValueNotifyingHost (mixPercent / 100.0f);
+
+        juce::AudioBuffer<float> buffer { 4, bs };
+        juce::MidiBuffer midi;
+        int n = 0;
+
+        for (int b = 0; b < 12; ++b)
+        {
+            for (int i = 0; i < bs; ++i, ++n)
+            {
+                const auto sub = 0.9f * (float) std::sin (2.0 * juce::MathConstants<double>::pi
+                                                          * 40.0 * n / 48000.0);
+                for (int ch = 0; ch < 2; ++ch)
+                    buffer.getWritePointer (ch)[i] = 0.8f;
+
+                buffer.getWritePointer (2)[i] = sub;
+                buffer.getWritePointer (3)[i] = sub;
+            }
+
+            p.processBlock (buffer, midi);
+        }
+
+        auto tightest = 1.0f;
+
+        for (auto i = juce::jmax<int64_t> (0, p.scope.head() - bs); i < p.scope.head(); ++i)
+        {
+            const auto& f = p.scope.at (i);
+            tightest = juce::jmin (tightest, f.lidTop, f.lidBot);
+        }
+
+        return tightest;
+    };
+
+    for (const auto recti : { false, true })
+    {
+        // Fully wet, the sub is well past the ceiling and the aperture shuts.
+        CHECK (tightestEdge (recti, 100.0f) < 0.2f);
+
+        // Fully dry, nothing the plug-in does reaches the output, so there is no
+        // aperture to draw at all.
+        CHECK (juce::exactlyEqual (tightestEdge (recti, 0.0f), 1.0f));
+
+        // And it opens monotonically on the way between the two.
+        CHECK (tightestEdge (recti, 25.0f) > tightestEdge (recti, 100.0f));
+    }
+
+    // RCTF's midpoint is its fully-processed position, so the mask is as tight
+    // there as the symmetric mode's is at the top of the travel.
+    CHECK (tightestEdge (true, 50.0f) < 0.2f);
+}
+
 void statePersists()
 {
     SideCrushProcessor a, b;
@@ -616,6 +682,7 @@ int main()
 
     shortcutsAreExact();
     wtfPansTheCarrier();
+    apertureFollowsMix();
     wtfFullIntensitySumsToMono();
     qualityLatencyIsConstant();
     qualitySwitchDoesNotClick();

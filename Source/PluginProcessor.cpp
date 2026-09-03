@@ -466,6 +466,20 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             detectorPtr[ch] = osDetector.getChannelPointer ((size_t) (sharedDetector ? 0 : ch));
     }
 
+    // How much of the output is the processed path. Read here rather than at the
+    // mixer below, because the scope's aperture needs it too and the two must be
+    // the same number or the mask would stop describing what came out.
+    const auto mixNorm = raw.mix->load() * 0.01f;
+    const auto wet = engine.getParams().recti ? juce::jmin (1.0f, mixNorm * 2.0f) : mixNorm;
+
+    // The aperture the *output* has, which below full MIX is not the one the
+    // clipper computed: the dry half it is blended with was never clipped, so
+    // the mask opens towards wide as the fader comes down and is gone at 0.
+    // Over RCTF's lower half `wet` is the same ramp, reaching the whole
+    // rectified signal at the midpoint -- the engine has already slid the two
+    // edges for the upper half.
+    const auto opened = [wet] (float lid) { return 1.0f - wet * (1.0f - lid); };
+
     // One running minimum per aperture edge. Under RCTF the two edges of a
     // channel move independently, and taking the tighter of the two for both
     // would draw a symmetric aperture the audio is not using.
@@ -513,8 +527,9 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         // and draw aliasing the real output does not have.
         if ((i % (size_t) factor) == (size_t) factor - 1)
         {
-            pendingScope[i / (size_t) factor] = { engine.lastDetector (0), topMin, botMin,
-                                                  0.0f, topMinR, botMinR, 0.0f };
+            pendingScope[i / (size_t) factor] = { engine.lastDetector (0),
+                                                  opened (topMin), opened (botMin), 0.0f,
+                                                  opened (topMinR), opened (botMinR), 0.0f };
             topMin = botMin = topMinR = botMinR = 1.0f;
         }
     }
@@ -567,9 +582,7 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     // one processed signal against another, and the engine has already blended
     // those two. So the dry crossfade runs out over the lower half of the travel
     // and then holds.
-    const auto mixNorm = raw.mix->load() * 0.01f;
-    mixer.setWetMixProportion (engine.getParams().recti ? juce::jmin (1.0f, mixNorm * 2.0f)
-                                                        : mixNorm);
+    mixer.setWetMixProportion (wet);
     mixer.mixWetSamples (block);
 
     main.applyGain (0, numSamples, juce::Decibels::decibelsToGain (raw.output->load()));

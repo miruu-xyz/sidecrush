@@ -481,12 +481,15 @@ void DialCaption::paint (juce::Graphics& g)
         return;
     }
 
-    const auto showHover = hovered && hoverText != nullptr;
+    // A click suppresses the reveal for as long as it asked for, so what is on
+    // screen straight afterwards is the state the click produced.
+    const auto showHover = hovered && hoverText != nullptr && ! isTimerRunning();
     const auto active = activeText != nullptr ? activeText() : juce::String();
 
     const auto text = showHover ? hoverText() : active.isNotEmpty() ? active : caption;
 
-    g.setColour (showHover || active.isNotEmpty() ? uicolour::accent : uicolour::label);
+    g.setColour (textColour != nullptr ? textColour()
+                                       : showHover ? uicolour::accent : uicolour::label);
     g.drawText (text, getLocalBounds(), juce::Justification::centred);
 }
 
@@ -507,8 +510,18 @@ void DialCaption::mouseUp (const juce::MouseEvent& e)
     if (e.mouseWasClicked() && onClick != nullptr)
     {
         onClick();
+
+        if (clickHoldMs > 0)
+            startTimer (clickHoldMs);
+
         repaint();
     }
+}
+
+void DialCaption::timerCallback()
+{
+    stopTimer();
+    repaint();
 }
 
 //==============================================================================
@@ -1269,18 +1282,28 @@ SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
     // The MIX caption is a switch as well as a label -- the same one the
     // settings panel carries, because RCTF is a property of this fader and
     // reaching for the gear to change what the fader under your cursor means is
-    // a detour. Figma node 11:18 gives it three states: the word dim at rest,
-    // the same word in accent under the cursor, and RCTF in accent while the
-    // mode is on. So hovering always says MIX -- which doubles as the way back,
-    // since the caption then names what a click restores.
+    // a detour.
+    //
+    // Colour is the mode and nothing else: blue while RCTF is on, grey while it
+    // is off, hover included. What hover moves is the word, and it always names
+    // the option a click would get you -- so the caption reads as a switch with
+    // its far position showing, rather than as a label that lights up.
     const auto rectiOn = [this]
     {
         return proc.apvts.getRawParameterValue (ids::recti)->load() > 0.5f;
     };
 
     mixCaption.activeText = [rectiOn] { return juce::String (rectiOn() ? "RCTF" : ""); };
-    mixCaption.hoverText = [] { return juce::String ("MIX"); };
+    mixCaption.hoverText = [rectiOn] { return juce::String (rectiOn() ? "MIX" : "RCTF"); };
+    mixCaption.textColour = [rectiOn] { return rectiOn() ? uicolour::accent : uicolour::label; };
     mixCaption.onClick = [this] { toggleRecti (proc); };
+
+    // The cursor is still on the word when the click lands, and the reveal names
+    // the *other* option -- so without a hold the caption would flip straight
+    // back to what you just switched away from and look like it had not taken.
+    // Two seconds is long enough to read the state you asked for and short
+    // enough not to feel stuck.
+    mixCaption.clickHoldMs = 2000;
 
     mixSlider.snapActive = rectiOn;
 

@@ -193,7 +193,8 @@ private:
 // to its value, so the pointer's position always has a number attached to it.
 // FILTER additionally reads a cyan PRE / POST on hover and flips the two when
 // clicked, which is the design's "Variant2".
-class DialCaption final : public juce::Component
+class DialCaption final : public juce::Component,
+                          private juce::Timer
 {
 public:
     explicit DialCaption (juce::String captionText, float fontHeight = 12.0f);
@@ -210,11 +211,25 @@ public:
     std::function<void()> onClick;
 
     // Set when the caption names a mode that is currently engaged: it stands in
-    // for the caption and reads in the accent tone, so the mode is legible
-    // without hovering. CLIP recolours itself for the same reason.
+    // for the caption at rest, so the mode is legible without hovering.
     std::function<juce::String()> activeText;
 
+    // How the text is coloured, when hover-brightening is not it. MIX's caption
+    // sets this because its colour is the mode indicator -- blue on, grey off --
+    // and hover moves the word rather than the tone. Same hook, and the same
+    // reason for it, as Pill::textColour.
+    std::function<juce::Colour()> textColour;
+
+    // Milliseconds after a click during which hovering reveals nothing. Zero,
+    // the default, means a caption reveals on hover the instant it is clicked --
+    // which is wrong for a switch the cursor is still sitting on: the reveal
+    // names the *other* option, so the word would snap back to the one you just
+    // moved away from and read as if the click had not taken.
+    int clickHoldMs = 0;
+
 private:
+    void timerCallback() override;
+
     const juce::String caption;
     const float fontSize;
     juce::String valueText;
