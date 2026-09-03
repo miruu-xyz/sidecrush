@@ -23,6 +23,7 @@ namespace ids
     constexpr auto scLink    = "sclink";
     constexpr auto wtfInt    = "wtfint";
     constexpr auto scSource  = "scsource";
+    constexpr auto recti     = "recti";
     constexpr auto quality   = "quality";
 }
 
@@ -50,11 +51,15 @@ namespace sclink
 //==============================================================================
 struct ScopeFrame
 {
-    float sc = 0.0f;    // filtered sidechain, the signal the thresholds measure
-    float lid = 1.0f;   // left lid. 0 = fully shut, 1 = wide open
-    float out = 0.0f;   // left output
-    float lidR = 1.0f;  // the right channel's pair. Identical to the left in
-    float outR = 0.0f;  // every mode but WTF, which is the one that draws them
+    float sc = 0.0f;     // filtered sidechain, the signal the thresholds measure
+    float lidTop = 1.0f; // left aperture, upper edge. 0 = fully shut, 1 = open
+    float lidBot = 1.0f; // left aperture, lower edge. The same number as lidTop
+                         // in every mode but RCTF, which is the one that
+                         // clips the two halves by different amounts
+    float out = 0.0f;    // left output
+    float lidTopR = 1.0f; // the right channel's pair. Identical to the left in
+    float lidBotR = 1.0f; // every mode but WTF, which is the one that draws them
+    float outR = 0.0f;
 };
 
 // Single producer (audio thread), single consumer (editor timer). The consumer
@@ -62,8 +67,8 @@ struct ScopeFrame
 // power-of-two ring is enough -- no locks, no blocking, and no allocation once
 // the ring is built.
 //
-// The ring is heap-held rather than inline because it is 640 KB and the
-// processor owns it by value: two processors as locals is 1.25 MB, which
+// The ring is heap-held rather than inline because it is 896 KB and the
+// processor owns it by value: two processors as locals is 1.75 MB, which
 // overflows the 1 MB stack Windows gives the main thread and segfaults before
 // a single check runs. tests/host_test.cpp does exactly that in
 // dryPathIsAligned, so this is not hypothetical -- it is what CI hit the moment
@@ -129,7 +134,7 @@ public:
     void setStateInformation (const void*, int) override;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout (
-        std::atomic<bool>* filterIsPostFlag);
+        std::atomic<bool>* filterIsPostFlag, std::atomic<bool>* rectiFlag);
 
     // In POST the FILTER knob is a release time, not a frequency, and the
     // parameter's own text function has to say so -- SPEC 4.3. Declared before
@@ -137,8 +142,15 @@ public:
     // holding this pointer are gone before it is.
     std::atomic<bool> filterIsPost { false };
 
+    // MIX stops being one crossfade under RCTF -- it is dry against the
+    // rectified result below 50% and that result against the symmetric one
+    // above -- so its own text function has to know which. Same arrangement,
+    // and the same lifetime reason, as the flag above it.
+    std::atomic<bool> rectiIsOn { false };
+
     juce::AudioProcessorValueTreeState apvts { *this, nullptr, "SIDECRUSH",
-                                               createParameterLayout (&filterIsPost) };
+                                               createParameterLayout (&filterIsPost,
+                                                                      &rectiIsOn) };
     ScopeFifo scope;
 
     std::atomic<float> gainReduction { 0.0f }; // 0 = lid open, 1 = fully shut
@@ -179,7 +191,7 @@ private:
     {
         std::atomic<float>* pre, *ceiling, *floorDb, *shape, *filterHz, *slope,
                           *output, *mix, *clip, *filterPos, *scLink, *wtfInt,
-                          *scSource, *quality;
+                          *scSource, *quality, *recti;
     };
 
     Raw raw {};

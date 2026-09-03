@@ -202,6 +202,8 @@ struct Params
     bool filterPost = false;   // rectifier order
     bool wtf = false;          // split the summed sidechain: + shuts L, - shuts R
     float wtfIntensity = 0.5f; // 0 .. 1, how far WTF is taken -- see 4.5
+    bool recti = false;        // clip only the half the sidechain's polarity points at
+    float rectiBlend = 1.0f;   // 0 = that rectified result, 1 = the symmetric one
 };
 
 class Engine
@@ -210,9 +212,18 @@ public:
     void prepare (double newSampleRate, int numChannels)
     {
         sampleRate = newSampleRate;
-        filters.resize ((size_t) std::max (1, numChannels));
-        lids.assign (filters.size(), 1.0f);
-        detectors.assign (filters.size(), 0.0f);
+
+        // Two filters per channel, not one: RCTF and WTF both need the
+        // sidechain's two half-waves followed separately, and in POST the
+        // rectifier has already thrown the sign away by the time the filter
+        // sees it -- so the split has to happen upstream of a filter each.
+        // Index 2*ch carries the positive half (and the whole bipolar signal in
+        // PRE, where one filter still does), 2*ch+1 the negative half.
+        const auto channels = (size_t) std::max (1, numChannels);
+        filters.resize (2 * channels);
+        lidsTop.assign (channels, 1.0f);
+        lidsBot.assign (channels, 1.0f);
+        detectors.assign (channels, 0.0f);
         reset();
     }
 
@@ -221,7 +232,8 @@ public:
         for (auto& f : filters)
             f.reset();
 
-        std::fill (lids.begin(), lids.end(), 1.0f);
+        std::fill (lidsTop.begin(), lidsTop.end(), 1.0f);
+        std::fill (lidsBot.begin(), lidsBot.end(), 1.0f);
         std::fill (detectors.begin(), detectors.end(), 0.0f);
     }
 
@@ -279,6 +291,55 @@ public:
             f.setup (params.filterHz, params.poles, sampleRate);
     }
 
+    // The detector, taken apart into everything downstream needs from it. The
+    // two halves are what RCTF clips against and what WTF pans with; `mag` is
+    // the symmetric magnitude every mode before them used.
+    struct Detect
+    {
+        float mag;   // what a single lid measures
+        float pos;   // the positive half of the sidechain
+        float neg;   // the negative half
+        float trace; // what the scope draws: bipolar in PRE, an envelope in POST
+    };
+
+    // One channel's detector, filtered. Costs two filter sections' worth of
+    // state in POST and one in PRE, because PRE's filter is still looking at a
+    // bipolar signal and the split can happen after it -- SPEC 4.3.
+    Detect detect (int channel, float sc) noexcept
+    {
+        auto& fPos = filters[(size_t) (2 * channel)];
+        auto& fNeg = filters[(size_t) (2 * channel + 1)];
+
+        if (params.filterPost)
+        {
+            // The split comes before the filter: the rectifier is the thing that
+            // destroys the sign, so anything downstream that needs the polarity
+            // has to be handed two signals here or it never gets one. This is
+            // the same order processWtfPair has always used.
+            const auto envPos = fPos.process (std::max (0.0f, sc));
+            const auto envNeg = fNeg.process (std::max (0.0f, -sc));
+
+            // Summed before the clamp, not after: Butterworth rings below zero
+            // on a rectified signal, and clamping the halves first would make
+            // this disagree with the envelope of the whole whenever one half is
+            // ringing negative while the other is not. envPos + envNeg is
+            // filter(|sc|) exactly -- the sections are linear -- so a mode that
+            // is not using the split gets the same number it always did.
+            const auto mag = std::max (0.0f, envPos + envNeg);
+
+            return { mag, std::max (0.0f, envPos), std::max (0.0f, envNeg), mag };
+        }
+
+        // PRE filters the bipolar sidechain, so the sign survives it and the
+        // split is free. The trace stays bipolar so the scope draws the whole
+        // wave: in WTF its top lobe is the left channel and its bottom lobe the
+        // right, and in RCTF each lobe is the half of the carrier it clips.
+        const auto filtered = fPos.process (sc);
+
+        return { std::abs (filtered), std::max (0.0f, filtered),
+                 std::max (0.0f, -filtered), filtered };
+    }
+
     // One sample of one channel. `sc` is the detector input for this channel.
     //
     // A stereo instance in WTF goes through processWtfPair below instead, which
@@ -288,51 +349,32 @@ public:
     // so the intensity dial has nothing to move -- SPEC 4.5.
     float processSample (int channel, float carrier, float sc) noexcept
     {
-        auto& filter = filters[(size_t) channel];
+        const auto d = detect (channel, sc);
 
         // WTF hands both channels the same summed sidechain and gives each one
         // half of it: the left is driven by its positive excursions, the right by
-        // its negative ones -- SPEC 4.5. Flipping the right channel's copy turns
-        // "the negative half" into "the positive half" and lets one half-wave
-        // rectifier serve both sides. A full-wave one would undo the split.
-        const auto sign = channel == 0 ? 1.0f : -1.0f;
+        // its negative ones -- SPEC 4.5.
+        const auto half = channel == 0 ? d.pos : d.neg;
 
-        // Filter before rectifier keeps the detector at waveform rate. Reversing
-        // them turns it into an envelope follower -- see SPEC 4.3.
-        // In PRE the filtered signal is still bipolar, which is what the scope
-        // draws the symmetric thresholds against. In POST it is already an
-        // envelope, and Butterworth ringing can drive it below zero -- clamp so
-        // the lid never exceeds 1 and the exponent never sees a negative base.
-        float mag;
+        // What one lid would measure, and the two RCTF splits it into. Outside
+        // WTF that is simply the sidechain's own two halves, so the carrier is
+        // clipped on the side the sidechain is currently pointing at and left
+        // alone on the other. Inside it, the channel only ever sees its own
+        // half, so its far side has nothing to close it and stays wide open.
+        const auto symMag = params.wtf ? half : d.mag;
+        const auto topMag = params.wtf ? (channel == 0 ? half : 0.0f) : d.pos;
+        const auto botMag = params.wtf ? (channel == 0 ? 0.0f : half) : d.neg;
 
-        if (params.filterPost)
-        {
-            // The split has to come first here: the rectifier is the thing that
-            // throws away the sign the split is made of. Two half-wave signals in
-            // means two envelopes out, one per side, which is what POST has to
-            // follow for the panning to survive the filter.
-            const auto rectified = params.wtf ? std::max (0.0f, sign * sc) : std::abs (sc);
-            const auto env = std::max (0.0f, filter.process (rectified));
-            detectors[(size_t) channel] = env;
-            mag = env;
-        }
-        else
-        {
-            // PRE filters the bipolar sidechain, so the sign survives it and the
-            // split can happen after -- which is what keeps this at waveform rate.
-            // The detector stays bipolar so the scope draws the whole wave: in
-            // WTF its top lobe is the left channel and its bottom lobe the right.
-            const auto filtered = filter.process (sc);
-            detectors[(size_t) channel] = filtered;
-            mag = params.wtf ? std::max (0.0f, sign * filtered) : std::abs (filtered);
-        }
+        detectors[(size_t) channel] = params.wtf && params.filterPost ? symMag : d.trace;
 
-        const auto lid = lidFor (mag);
-        lids[(size_t) channel] = lid;
+        const auto sym = lidFor (symMag);
+        const auto top = lidFor (topMag);
+        const auto bot = lidFor (botMag);
+        setLids (channel, sym, top, bot);
 
         // OUTPUT is deliberately not here: it is the last thing in the chain,
         // after MIX, so it has to scale the blend and not just the wet half.
-        return shaped (carrier * params.preGain, lid);
+        return shapedRecti (carrier * params.preGain, sym, top, bot);
     }
 
     // One sample of both channels, WTF only. The two channels stop being
@@ -343,61 +385,50 @@ public:
     // what the WTF and MONO routings already hand the detector.
     void processWtfPair (float& left, float& right, float sc) noexcept
     {
+        // Both channels' filter pairs see the same summed sidechain, so they
+        // return the same numbers and either will do. Running the second one
+        // anyway keeps its state in step with the first, so leaving WTF does not
+        // resume channel 1 from a filter that stopped updating however long ago
+        // the mode was selected.
+        const auto d = detect (0, sc);
+        detect (1, sc);
+
         // The two half-wave detector signals the split is made of, and beside
         // them the detector MONO would have built from the same sidechain. The
         // mono one costs no extra filter: the sections are linear, so the two
-        // halves' envelopes sum to the envelope of the whole.
-        float hPos, hNeg, monoMag;
+        // halves' envelopes sum to the envelope of the whole -- see detect().
+        const auto hPos = d.pos;
+        const auto hNeg = d.neg;
+        const auto monoMag = d.mag;
 
-        if (params.filterPost)
-        {
-            // The split is before the filter here, exactly as it is per-channel:
-            // rectifying first and splitting after would hand both sides the
-            // same envelope and there would be no pan left -- SPEC 4.5.
-            const auto envPos = filters[0].process (std::max (0.0f, sc));
-            const auto envNeg = filters[1].process (std::max (0.0f, -sc));
-
-            // Butterworth rings below zero on a rectified signal and the clamp
-            // that fixes that -- SPEC 4.3 -- is why the sum has to be taken
-            // before it and not after. Clamping the halves and then adding them
-            // is not clamping the sum: whenever the ringing puts one half below
-            // zero while the other is above, the two disagree, and the mono
-            // detector this mode is aiming at is the second one.
-            monoMag = std::max (0.0f, envPos + envNeg);
-
-            hPos = std::max (0.0f, envPos);
-            hNeg = std::max (0.0f, envNeg);
-            detectors[0] = hPos;
-            detectors[1] = hNeg;
-        }
-        else
-        {
-            // Both filters see the same bipolar sum and return the same number.
-            // Running the second one anyway keeps its state in step with the
-            // first, so leaving WTF does not resume channel 1 from a filter that
-            // stopped updating however long ago the mode was selected.
-            const auto filtered = filters[0].process (sc);
-            filters[1].process (sc);
-            detectors[0] = detectors[1] = filtered;
-
-            hPos = std::max (0.0f, filtered);
-            hNeg = std::max (0.0f, -filtered);
-            monoMag = std::abs (filtered);
-        }
+        detectors[0] = params.filterPost ? hPos : d.trace;
+        detectors[1] = params.filterPost ? hNeg : d.trace;
 
         // splitAmount 1 is the full split, 0 puts the mono detector on both
         // channels -- which is MONO, since the two lids then agree exactly.
         const auto blend = 1.0f - splitAmount;
         const auto lidL = lidFor (splitAmount * hPos + blend * monoMag);
         const auto lidR = lidFor (splitAmount * hNeg + blend * monoMag);
-        lids[0] = lidL;
-        lids[1] = lidR;
+
+        // RCTF's pair, per channel. Each channel keeps the lid belonging to its
+        // own half of the sidechain at every intensity -- that half is what WTF
+        // handed it -- and the far side is closed only by however much of the
+        // split has not been taken yet. At 0% both channels hold both lids, which
+        // is the ordinary rectified result on a mono sum; at 100% each holds one
+        // and the other stands wide open.
+        const auto topL = lidFor (hPos);
+        const auto botL = lidFor (blend * hNeg);
+        const auto topR = lidFor (blend * hPos);
+        const auto botR = lidFor (hNeg);
+
+        setLids (0, lidL, topL, botL);
+        setLids (1, lidR, topR, botR);
 
         const auto drivenL = left * params.preGain;
         const auto drivenR = right * params.preGain;
 
-        auto outL = shaped (drivenL, lidL);
-        auto outR = shaped (drivenR, lidR);
+        auto outL = shapedRecti (drivenL, lidL, topL, botL);
+        auto outR = shapedRecti (drivenR, lidR, topR, botR);
 
         // Above 50% the pair is slid until its mid is the mono result. What is
         // left between the channels is untouched, so the difference the split
@@ -407,12 +438,16 @@ public:
         // two channels' opposite halves annihilating, not either channel's own.
         //
         // The correction is the same number on both channels, which is what
-        // makes it cancel; a per-channel one would not.
+        // makes it cancel; a per-channel one would not. It holds whatever shape
+        // the carrier went through, RCTF's asymmetric one included, because it
+        // is defined as the difference between two sums and not as a lid.
         if (midBlend > 0.0f)
         {
             const auto lidMono = lidFor (monoMag);
-            const auto monoL = shaped (drivenL, lidMono);
-            const auto monoR = shaped (drivenR, lidMono);
+            const auto monoTop = lidFor (hPos);
+            const auto monoBot = lidFor (hNeg);
+            const auto monoL = shapedRecti (drivenL, lidMono, monoTop, monoBot);
+            const auto monoR = shapedRecti (drivenR, lidMono, monoTop, monoBot);
 
             const auto correction = midBlend * 0.5f * ((monoL + monoR) - (outL + outR));
             outL += correction;
@@ -447,7 +482,18 @@ public:
         right = outR;
     }
 
-    float lastLid (int channel) const noexcept { return lids[(size_t) channel]; }
+    // The tighter of the two lids -- what a single symmetric aperture would be,
+    // and what the gain-reduction meter has always shown. Outside RCTF the two
+    // are the same number.
+    float lastLid (int channel) const noexcept
+    {
+        return std::min (lidsTop[(size_t) channel], lidsBot[(size_t) channel]);
+    }
+
+    // The aperture as the scope has to draw it: two edges that move apart under
+    // RCTF, because only one of them is clipping anything at a time.
+    float lastLidTop (int channel) const noexcept { return lidsTop[(size_t) channel]; }
+    float lastLidBot (int channel) const noexcept { return lidsBot[(size_t) channel]; }
 
     // The signal the CEILING and FLOOR thresholds actually measure -- what the
     // scope draws in cyan. Bipolar in PRE mode, an envelope in POST.
@@ -462,16 +508,57 @@ private:
         return shapeTable.lid (std::clamp ((mag - params.floorLin) * windowScale, 0.0f, 1.0f));
     }
 
+    // The aperture as it is to be *drawn*, which is not the pair the shaper
+    // clips against: what leaves this plug-in is a crossfade of two shapes, so
+    // the mask has to follow the fader that crossfades them. Over MIX's upper
+    // half the two edges slide back onto the symmetric lid, which is the shape
+    // taking over. The lower half is the dry blend and is applied downstream,
+    // where the proportion the mixer is using is already known.
+    //
+    // Outside RCTF the two edges are one number, and storing it twice is what
+    // keeps every reader -- the meter, the scope -- on one path.
+    void setLids (int channel, float sym, float top, float bot) noexcept
+    {
+        lidsTop[(size_t) channel] = params.recti ? top + params.rectiBlend * (sym - top) : sym;
+        lidsBot[(size_t) channel] = params.recti ? bot + params.rectiBlend * (sym - bot) : sym;
+    }
+
     // The lid applied to an already-driven carrier: a wall, or a gain.
     float shaped (float driven, float lid) const noexcept
     {
         return params.clip ? std::clamp (driven, -lid, lid) : driven * lid;
     }
 
+    // RCTF. The two lids are independent, so only the half of the waveform the
+    // sidechain's own polarity points at is touched and the other passes at full
+    // amplitude -- which means RCTF is not a limiter: the ceiling stops holding
+    // in one direction, the same admission SPEC 4.5 already makes about WTF above
+    // 50%. What it buys is an asymmetry modulated at the sidechain's own rate,
+    // which prints the sidechain's period onto the carrier as even harmonics.
+    //
+    // Under CLIP the asymmetry is a pair of walls at different heights. Without
+    // it, it is a pair of gains -- still continuous through zero, since both
+    // sides meet at 0, so what comes out is a kink and not a step.
+    //
+    // rectiBlend crossfades this against the symmetric result. It is the upper
+    // half of the MIX fader's travel; the lower half is dry against this, and
+    // the mixer upstream does that one.
+    float shapedRecti (float driven, float sym, float top, float bot) const noexcept
+    {
+        if (! params.recti)
+            return shaped (driven, sym);
+
+        const auto rect = params.clip ? std::clamp (driven, -bot, top)
+                                      : driven * (driven > 0.0f ? top : bot);
+
+        return rect + params.rectiBlend * (shaped (driven, sym) - rect);
+    }
+
     Params params;
     ShapeTable shapeTable;
-    std::vector<DetectorFilter> filters { 2 };
-    std::vector<float> lids { 1.0f, 1.0f };
+    std::vector<DetectorFilter> filters { 4 };
+    std::vector<float> lidsTop { 1.0f, 1.0f };
+    std::vector<float> lidsBot { 1.0f, 1.0f };
     std::vector<float> detectors { 0.0f, 0.0f };
     double sampleRate = 44100.0;
     float windowScale = 2.0f;

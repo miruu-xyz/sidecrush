@@ -480,6 +480,138 @@ void wtfWidthLeavesMonoAndDryAlone()
     }
 }
 
+//==============================================================================
+// RECTI clips only the half of the carrier the sidechain's polarity points at,
+// and leaves the other one at full amplitude -- SPEC 4.7.
+void rctfClipsOneSideOnly()
+{
+    for (const auto post : { false, true })
+    {
+        auto p = baseParams();
+        p.clip = true;
+        p.ceilingLin = 0.5f;
+        p.recti = true;
+        p.rectiBlend = 0.0f;   // the midpoint of MIX: the rectified result alone
+        p.filterPost = post;
+
+        // POST has to follow the two half-waves separately or the polarity is
+        // gone by the time the lid is computed. A short release is what makes
+        // that visible: a long one settles both envelopes onto the same number
+        // and RECTI degenerates back to the symmetric clip.
+        p.filterHz = post ? 8000.0f : 0.0f;
+
+        auto e = makeEngine (p);
+
+        // A sidechain hard over on one side, held long enough for POST's
+        // envelope to get there, then hard over on the other.
+        const auto settle = [&e] (float sc)
+        {
+            for (int i = 0; i < 4000; ++i)
+                e.processSample (0, 0.0f, sc);
+        };
+
+        settle (1.0f);
+
+        // The ceiling is 0.5 and the sidechain is well past it, so the lid on
+        // the driven side is shut. The other side never saw a thing.
+        CHECK (near (e.processSample (0, 1.0f, 1.0f), 0.0f, 0.02f));
+        CHECK (near (e.processSample (0, -1.0f, 1.0f), -1.0f, 0.02f));
+
+        settle (-1.0f);
+
+        CHECK (near (e.processSample (0, -1.0f, -1.0f), 0.0f, 0.02f));
+        CHECK (near (e.processSample (0, 1.0f, -1.0f), 1.0f, 0.02f));
+
+        // The two aperture edges are what the scope draws, and they have to
+        // disagree for any of the above to be visible.
+        CHECK (e.lastLidTop (0) > 0.9f);
+        CHECK (e.lastLidBot (0) < 0.1f);
+    }
+}
+
+//==============================================================================
+// The top of MIX's travel is the symmetric result exactly, and RECTI switched
+// off is the symmetric result at every point of it -- so nothing that predates
+// this parameter moves.
+void rctfEndpointsAndBypass()
+{
+    for (const auto clip : { false, true })
+    {
+        for (const auto post : { false, true })
+        {
+            auto p = baseParams();
+            p.clip = clip;
+            p.ceilingLin = 0.4f;
+            p.floorLin = 0.05f;
+            p.filterPost = post;
+            p.filterHz = 200.0f;
+            p.shape = 0.3f;
+
+            auto plain = makeEngine (p);
+
+            auto blended = p;
+            blended.recti = true;
+            blended.rectiBlend = 1.0f;   // MIX at the top: no rectified content
+            auto top = makeEngine (blended);
+
+            auto bypassed = p;
+            bypassed.recti = false;
+            bypassed.rectiBlend = 0.0f;  // must be ignored outright
+            auto off = makeEngine (bypassed);
+
+            for (int i = 0; i < 2000; ++i)
+            {
+                const auto phase = std::numbers::pi_v<float> * 2.0f * 220.0f
+                                 * (float) i / 48000.0f;
+                const auto sc = std::sin (phase);
+                const auto carrier = std::sin (phase * 3.7f);
+
+                const auto want = plain.processSample (0, carrier, sc);
+                CHECK (near (top.processSample (0, carrier, sc), want));
+                CHECK (near (off.processSample (0, carrier, sc), want));
+            }
+        }
+    }
+}
+
+//==============================================================================
+// The mono sum still cancels back to exactly the MONO result at 100% WTF
+// intensity, RECTI's asymmetric shape included -- the correction is defined as
+// a difference of sums, so it does not care what shape produced them.
+void rctfSurvivesWtfCancellation()
+{
+    auto p = baseParams();
+    p.clip = true;
+    p.ceilingLin = 0.35f;
+    p.wtf = true;
+    p.wtfIntensity = 1.0f;
+    p.recti = true;
+    p.rectiBlend = 0.0f;
+    auto wtf = makeEngine (p);
+
+    auto monoParams = p;
+    monoParams.wtf = false;
+    auto mono = makeEngine (monoParams);
+
+    auto worst = 0.0f;
+
+    for (int i = 0; i < 2000; ++i)
+    {
+        const auto phase = std::numbers::pi_v<float> * 2.0f * 90.0f * (float) i / 48000.0f;
+        const auto sc = std::sin (phase);
+        auto l = std::sin (phase * 2.1f);
+        auto r = std::sin (phase * 3.3f);
+
+        const auto wantL = mono.processSample (0, l, sc);
+        const auto wantR = mono.processSample (0, r, sc);
+
+        wtf.processWtfPair (l, r, sc);
+        worst = std::fmax (worst, std::fabs ((l + r) - (wantL + wantR)));
+    }
+
+    CHECK (worst <= tol);
+}
+
 } // namespace
 
 int main()
@@ -494,6 +626,9 @@ int main()
     wtfSplitsBySign();
     wtfIntensityEndpoints();
     wtfWidthLeavesMonoAndDryAlone();
+    rctfClipsOneSideOnly();
+    rctfEndpointsAndBypass();
+    rctfSurvivesWtfCancellation();
 
     std::puts ("sidecrush engine: all checks passed");
     return 0;

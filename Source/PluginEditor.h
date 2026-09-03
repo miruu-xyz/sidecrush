@@ -193,10 +193,11 @@ private:
 // to its value, so the pointer's position always has a number attached to it.
 // FILTER additionally reads a cyan PRE / POST on hover and flips the two when
 // clicked, which is the design's "Variant2".
-class DialCaption final : public juce::Component
+class DialCaption final : public juce::Component,
+                          private juce::Timer
 {
 public:
-    explicit DialCaption (juce::String captionText);
+    explicit DialCaption (juce::String captionText, float fontHeight = 12.0f);
 
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -209,8 +210,28 @@ public:
     std::function<juce::String()> hoverText; // drawn in accent, if set
     std::function<void()> onClick;
 
+    // Set when the caption names a mode that is currently engaged: it stands in
+    // for the caption at rest, so the mode is legible without hovering.
+    std::function<juce::String()> activeText;
+
+    // How the text is coloured, when hover-brightening is not it. MIX's caption
+    // sets this because its colour is the mode indicator -- blue on, grey off --
+    // and hover moves the word rather than the tone. Same hook, and the same
+    // reason for it, as Pill::textColour.
+    std::function<juce::Colour()> textColour;
+
+    // Milliseconds after a click during which hovering reveals nothing. Zero,
+    // the default, means a caption reveals on hover the instant it is clicked --
+    // which is wrong for a switch the cursor is still sitting on: the reveal
+    // names the *other* option, so the word would snap back to the one you just
+    // moved away from and read as if the click had not taken.
+    int clickHoldMs = 0;
+
 private:
+    void timerCallback() override;
+
     const juce::String caption;
+    const float fontSize;
     juce::String valueText;
     bool hovered = false;
 };
@@ -319,7 +340,7 @@ public:
     Pill scale;
 
 private:
-    Pill link, quality, filterPos, source, wtfInt;
+    Pill link, quality, filterPos, source, wtfInt, recti;
 
     // WTF's intensity only exists while WTF is selected -- Figma's annotation on
     // the pill says so, and a dial that does nothing is worse than no dial. It
@@ -330,6 +351,25 @@ private:
     // Pill gives: the host can move SC LINK from the audio thread, and this is
     // the one mechanism that marshals it without allocating per change.
     juce::ParameterAttachment linkWatch;
+};
+
+//==============================================================================
+// MIX's midpoint is the whole rectified signal, and under RCTF it is the only
+// point on the fader with a name rather than a proportion -- so it catches
+// under the cursor. Off, and anywhere but right beside it, the fader is
+// ordinary: this is a detent, not a step.
+class SnappingSlider final : public juce::Slider
+{
+public:
+    std::function<bool()> snapActive;
+
+    double snapValue (double attempted, DragMode mode) override
+    {
+        if (mode == notDragging || snapActive == nullptr || ! snapActive())
+            return attempted;
+
+        return std::abs (attempted - 50.0) <= 2.5 ? 50.0 : attempted;
+    }
 };
 
 //==============================================================================
@@ -370,11 +410,12 @@ private:
     SideCrushProcessor& proc;
     SideCrushLookAndFeel lookAndFeel;
 
-    juce::Slider preSlider, outputSlider, mixSlider, ceilingKnob, filterKnob, shapeKnob;
+    juce::Slider preSlider, outputSlider, ceilingKnob, filterKnob, shapeKnob;
+    SnappingSlider mixSlider;
     std::unique_ptr<SliderAttachment> preAtt, outputAtt, mixAtt, ceilingAtt, filterAtt, shapeAtt;
 
     Pill slopePill, floorPill, clipPill;
-    DialCaption filterCaption, shapeCaption;
+    DialCaption filterCaption, shapeCaption, mixCaption;
     IconButton gear, close;
     ActivityLed led;
     ScopeComponent scope;
@@ -391,6 +432,11 @@ private:
 
     // The FILTER readout relabels itself in POST, and nothing else repaints it.
     bool lastFilterPost = false;
+
+    // MIX's readout names its two components under RCTF and reads a plain
+    // percentage otherwise, so flipping the mode is what rebuilds its text --
+    // the same arrangement, for the same reason, as the flag above it.
+    bool lastRecti = false;
 
     // The FLOOR readout brackets its value once the ceiling is holding it down,
     // so it repaints when the *ceiling* moves. Starts outside the range, so the
