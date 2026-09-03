@@ -54,7 +54,7 @@ struct ScopeFrame
     float sc = 0.0f;     // filtered sidechain, the signal the thresholds measure
     float lidTop = 1.0f; // left aperture, upper edge. 0 = fully shut, 1 = open
     float lidBot = 1.0f; // left aperture, lower edge. The same number as lidTop
-                         // in every mode but RECTI, which is the one that
+                         // in every mode but RCTF, which is the one that
                          // clips the two halves by different amounts
     float out = 0.0f;    // left output
     float lidTopR = 1.0f; // the right channel's pair. Identical to the left in
@@ -142,7 +142,7 @@ public:
     // holding this pointer are gone before it is.
     std::atomic<bool> filterIsPost { false };
 
-    // MIX stops being one crossfade under RECTI -- it is dry against the
+    // MIX stops being one crossfade under RCTF -- it is dry against the
     // rectified result below 50% and that result against the symmetric one
     // above -- so its own text function has to know which. Same arrangement,
     // and the same lifetime reason, as the flag above it.

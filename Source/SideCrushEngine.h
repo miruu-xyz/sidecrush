@@ -213,7 +213,7 @@ public:
     {
         sampleRate = newSampleRate;
 
-        // Two filters per channel, not one: RECTI and WTF both need the
+        // Two filters per channel, not one: RCTF and WTF both need the
         // sidechain's two half-waves followed separately, and in POST the
         // rectifier has already thrown the sign away by the time the filter
         // sees it -- so the split has to happen upstream of a filter each.
@@ -292,7 +292,7 @@ public:
     }
 
     // The detector, taken apart into everything downstream needs from it. The
-    // two halves are what RECTI clips against and what WTF pans with; `mag` is
+    // two halves are what RCTF clips against and what WTF pans with; `mag` is
     // the symmetric magnitude every mode before them used.
     struct Detect
     {
@@ -333,7 +333,7 @@ public:
         // PRE filters the bipolar sidechain, so the sign survives it and the
         // split is free. The trace stays bipolar so the scope draws the whole
         // wave: in WTF its top lobe is the left channel and its bottom lobe the
-        // right, and in RECTI each lobe is the half of the carrier it clips.
+        // right, and in RCTF each lobe is the half of the carrier it clips.
         const auto filtered = fPos.process (sc);
 
         return { std::abs (filtered), std::max (0.0f, filtered),
@@ -356,7 +356,7 @@ public:
         // its negative ones -- SPEC 4.5.
         const auto half = channel == 0 ? d.pos : d.neg;
 
-        // What one lid would measure, and the two RECTI splits it into. Outside
+        // What one lid would measure, and the two RCTF splits it into. Outside
         // WTF that is simply the sidechain's own two halves, so the carrier is
         // clipped on the side the sidechain is currently pointing at and left
         // alone on the other. Inside it, the channel only ever sees its own
@@ -409,7 +409,7 @@ public:
         const auto lidL = lidFor (splitAmount * hPos + blend * monoMag);
         const auto lidR = lidFor (splitAmount * hNeg + blend * monoMag);
 
-        // RECTI's pair, per channel. Each channel keeps the lid belonging to its
+        // RCTF's pair, per channel. Each channel keeps the lid belonging to its
         // own half of the sidechain at every intensity -- that half is what WTF
         // handed it -- and the far side is closed only by however much of the
         // split has not been taken yet. At 0% both channels hold both lids, which
@@ -433,7 +433,7 @@ public:
         //
         // The correction is the same number on both channels, which is what
         // makes it cancel; a per-channel one would not. It holds whatever shape
-        // the carrier went through, RECTI's asymmetric one included, because it
+        // the carrier went through, RCTF's asymmetric one included, because it
         // is defined as the difference between two sums and not as a lid.
         if (midBlend > 0.0f)
         {
@@ -477,7 +477,7 @@ public:
     }
 
     // The tighter of the two lids -- what a single symmetric aperture would be,
-    // and what the gain-reduction meter has always shown. Outside RECTI the two
+    // and what the gain-reduction meter has always shown. Outside RCTF the two
     // are the same number.
     float lastLid (int channel) const noexcept
     {
@@ -485,7 +485,7 @@ public:
     }
 
     // The aperture as the scope has to draw it: two edges that move apart under
-    // RECTI, because only one of them is clipping anything at a time.
+    // RCTF, because only one of them is clipping anything at a time.
     float lastLidTop (int channel) const noexcept { return lidsTop[(size_t) channel]; }
     float lastLidBot (int channel) const noexcept { return lidsBot[(size_t) channel]; }
 
@@ -502,7 +502,7 @@ private:
         return shapeTable.lid (std::clamp ((mag - params.floorLin) * windowScale, 0.0f, 1.0f));
     }
 
-    // Outside RECTI the two lids are one number, and storing it twice is what
+    // Outside RCTF the two lids are one number, and storing it twice is what
     // keeps every reader -- the meter, the scope, the shaper -- on one path.
     void setLids (int channel, float sym, float top, float bot) noexcept
     {
@@ -516,9 +516,9 @@ private:
         return params.clip ? std::clamp (driven, -lid, lid) : driven * lid;
     }
 
-    // RECTI. The two lids are independent, so only the half of the waveform the
+    // RCTF. The two lids are independent, so only the half of the waveform the
     // sidechain's own polarity points at is touched and the other passes at full
-    // amplitude -- which means RECTI is not a limiter: the ceiling stops holding
+    // amplitude -- which means RCTF is not a limiter: the ceiling stops holding
     // in one direction, the same admission SPEC 4.5 already makes about WTF above
     // 50%. What it buys is an asymmetry modulated at the sidechain's own rate,
     // which prints the sidechain's period onto the carrier as even harmonics.

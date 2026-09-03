@@ -117,7 +117,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SideCrushProcessor::createPa
     // Fully wet by default: this is a limiter first, and a parallel one only if
     // someone asks for it.
     //
-    // Under RECTI the fader is two crossfades end to end rather than one -- dry
+    // Under RCTF the fader is two crossfades end to end rather than one -- dry
     // against the rectified result up to the midpoint, that result against the
     // symmetric one after it -- so 100% wet is no longer at the top of the
     // travel and a plain percentage would be naming the wrong thing. Both
@@ -179,13 +179,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SideCrushProcessor::createPa
         ParameterID { ids::scSource, 1 }, "Sidechain Source",
         StringArray { "EXT", "INT" }, 0));
 
-    // RECTI. The lid stops being one symmetric aperture and becomes two edges,
+    // RCTF. The lid stops being one symmetric aperture and becomes two edges,
     // each driven by one half of the sidechain, so the carrier is only clipped
     // on the side the sidechain's own polarity points at. Off by default: it
     // gives up the ceiling in one direction, which is not what a limiter should
     // do unless it was asked to. See SPEC 4.7.
     layout.add (std::make_unique<AudioParameterBool> (
-        ParameterID { ids::recti, 1 }, "Recti Mix", false));
+        ParameterID { ids::recti, 1 }, "Rectify", false));
 
     // HQ first: nobody should have to find a button to get the good version.
     layout.add (std::make_unique<AudioParameterChoice> (
@@ -316,7 +316,7 @@ void SideCrushProcessor::pullParameters()
     p.wtf = (int) raw.scLink->load() == sclink::wtf;
     p.wtfIntensity = raw.wtfInt->load() * 0.01f;
 
-    // MIX's upper half. Under RECTI the fader crosses dry into the rectified
+    // MIX's upper half. Under RCTF the fader crosses dry into the rectified
     // result over its lower half and the rectified result into the symmetric one
     // over its upper -- the same two-halves split wtfIntensity uses one screen
     // up, for the same reason: one fader, two things to say with it. The lower
@@ -466,7 +466,7 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             detectorPtr[ch] = osDetector.getChannelPointer ((size_t) (sharedDetector ? 0 : ch));
     }
 
-    // One running minimum per aperture edge. Under RECTI the two edges of a
+    // One running minimum per aperture edge. Under RCTF the two edges of a
     // channel move independently, and taking the tighter of the two for both
     // would draw a symmetric aperture the audio is not using.
     auto topMin = 1.0f, botMin = 1.0f, topMinR = 1.0f, botMinR = 1.0f;
@@ -563,7 +563,7 @@ void SideCrushProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     // was trimming.
     auto block = juce::dsp::AudioBlock<float> (main).getSubBlock (0, (size_t) numSamples);
 
-    // Under RECTI the dry side is gone by the midpoint -- everything above it is
+    // Under RCTF the dry side is gone by the midpoint -- everything above it is
     // one processed signal against another, and the engine has already blended
     // those two. So the dry crossfade runs out over the lower half of the travel
     // and then holds.

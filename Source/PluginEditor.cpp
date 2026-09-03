@@ -33,10 +33,10 @@ namespace
                             });
     }
 
-    // RECTI's switch, shared by the settings pill and the MIX caption -- one
+    // RCTF's switch, shared by the settings pill and the MIX caption -- one
     // switch in two places, and it moves two parameters either way.
     //
-    // MIX's midpoint is RECTI's "fully processed" the way the top of the travel
+    // MIX's midpoint is RCTF's "fully processed" the way the top of the travel
     // is the symmetric mode's, so turning it on puts the fader where this mode's
     // own full effect is rather than leaving it pointing at a blend that has
     // just changed meaning underneath it. Turning it off puts back whatever the
@@ -1026,7 +1026,7 @@ void ScopeComponent::paint (juce::Graphics& g)
                 g.setGradientFill ({ juce::Colours::white.withAlpha (0.08f), centreX, mid,
                                      juce::Colours::white.withAlpha (0.0f), centreX, bounds.getBottom(), false });
                 // Top edge from the left channel, bottom from the right: in WTF
-                // those are the two halves of the split, and under RECTI each is
+                // those are the two halves of the split, and under RCTF each is
                 // already the edge that half of the sidechain is closing. Every
                 // other mode has all four the same number, so this draws the one
                 // symmetric aperture it always did.
@@ -1073,7 +1073,7 @@ SettingsPanel::SettingsPanel (SideCrushProcessor& p)
       filterPos (p, ids::filterPos, Pill::Gesture::cycle, "FILTER"),
       source (p, ids::scSource, Pill::Gesture::cycle, "SIGNAL"),
       wtfInt (p, ids::wtfInt, Pill::Gesture::drag, "WTF"),
-      recti (p, ids::recti, Pill::Gesture::cycle, "MIX"),
+      recti (p, ids::recti, Pill::Gesture::cycle),
       linkWatch (*p.apvts.getParameter (ids::scLink),
                  [this] (float value)
                  {
@@ -1104,13 +1104,15 @@ SettingsPanel::SettingsPanel (SideCrushProcessor& p)
 
     // The parameter is a bool, and "On"/"Off" says nothing about what is on --
     // the two states are two different meanings for the MIX fader, so they are
-    // named after those. The click is the editor's: it moves MIX as well.
+    // named after those. Whole-label rather than the dim-prefix form its
+    // neighbours use, which is how Figma node 2:35 draws it. The click is not
+    // the pill's own: it moves MIX as well.
     recti.onClick = [&p] { toggleRecti (p); };
 
     recti.overrideText = [&p]
     {
         return juce::String (p.apvts.getRawParameterValue (ids::recti)->load() > 0.5f
-                                 ? "RECTI" : "NORMAL");
+                                 ? "RECTIFIED" : "CLEAN MIX");
     };
 
     // A continuous dial has no choice list to right-click, so it gets the three
@@ -1155,26 +1157,38 @@ void SettingsPanel::resized()
     const auto centreX = getWidth() / 2;
     const auto centreY = getHeight() / 2;
 
-    const auto row = [centreX] (Pill& a, int aWidth, Pill* b, int bWidth, int y)
+    // One centred row of pills, 21 tall and 8 apart. A null entry is a pill that
+    // is not showing -- WTF's, which comes and goes -- and the row closes up
+    // around it rather than leaving a hole.
+    const auto row = [centreX] (std::initializer_list<std::pair<Pill*, int>> pills, int y)
     {
-        const auto total = b != nullptr ? aWidth + 8 + bWidth : aWidth;
-        a.setBounds (centreX - total / 2, y, aWidth, 21);
+        auto total = 0;
 
-        if (b != nullptr)
-            b->setBounds (centreX - total / 2 + aWidth + 8, y, bWidth, 21);
+        for (const auto& [pill, width] : pills)
+            if (pill != nullptr)
+                total += (total > 0 ? 8 : 0) + width;
+
+        auto x = centreX - total / 2;
+
+        for (const auto& [pill, width] : pills)
+            if (pill != nullptr)
+            {
+                pill->setBounds (x, y, width, 21);
+                x += width + 8;
+            }
     };
 
-    // Two rows of routing, then MIX's own mode, then a fourth for the two dials
-    // that are not routing at all. WTF joins SCALE there rather than the link it
-    // belongs to, because it is an amount and everything on the rows above is a
-    // switch; RECTI sits apart from both because it is neither -- it changes
-    // what the MIX fader on the front panel means.
-    // The rows are one evenly-spaced block, centred: 21 tall each, 8 apart, so
-    // four of them come to 108.
-    row (link, 80, &quality, 43, centreY - 54);
-    row (filterPos, 101, &source, 107, centreY - 25);
-    row (recti, 110, nullptr, 0, centreY + 4);
-    row (scale, 113, wtfInt.isVisible() ? &wtfInt : nullptr, 90, centreY + 33);
+    // Two rows of routing, then a third for the two dials that are not routing at
+    // all. WTF joins SCALE there rather than the link it belongs to, because it
+    // is an amount and everything on the rows above is a switch.
+    //
+    // Widths and spacing are read straight off Figma node 2:35: rows 1 and 2 are
+    // 29 apart, and the third sits below a wider 41 so the two amounts read as
+    // their own group. The block is 91 tall and centred, which is 45 above the
+    // panel's middle.
+    row ({ { &link, 80 }, { &quality, 43 }, { &recti, 99 } }, centreY - 45);
+    row ({ { &filterPos, 101 }, { &source, 107 } }, centreY - 16);
+    row ({ { &scale, 113 }, { wtfInt.isVisible() ? &wtfInt : nullptr, 90 } }, centreY + 25);
 }
 
 //==============================================================================
@@ -1253,18 +1267,19 @@ SideCrushEditor::SideCrushEditor (SideCrushProcessor& p)
     };
 
     // The MIX caption is a switch as well as a label -- the same one the
-    // settings panel carries, because RECTI is a property of this fader and
+    // settings panel carries, because RCTF is a property of this fader and
     // reaching for the gear to change what the fader under your cursor means is
-    // a detour. Engaged, it reads its own name in accent; hovering shows the
-    // mode a click would leave you in, which is the half FILTER's caption gets
-    // for free by having two names to alternate.
+    // a detour. Figma node 11:18 gives it three states: the word dim at rest,
+    // the same word in accent under the cursor, and RCTF in accent while the
+    // mode is on. So hovering always says MIX -- which doubles as the way back,
+    // since the caption then names what a click restores.
     const auto rectiOn = [this]
     {
         return proc.apvts.getRawParameterValue (ids::recti)->load() > 0.5f;
     };
 
-    mixCaption.activeText = [rectiOn] { return juce::String (rectiOn() ? "RECTI" : ""); };
-    mixCaption.hoverText = [rectiOn] { return juce::String (rectiOn() ? "MIX" : "RECTI"); };
+    mixCaption.activeText = [rectiOn] { return juce::String (rectiOn() ? "RCTF" : ""); };
+    mixCaption.hoverText = [] { return juce::String ("MIX"); };
     mixCaption.onClick = [this] { toggleRecti (proc); };
 
     mixSlider.snapActive = rectiOn;
@@ -1516,7 +1531,7 @@ void SideCrushEditor::timerCallback()
         filterKnob.updateText();
     }
 
-    // MIX's readout names its two components under RECTI and reads a plain
+    // MIX's readout names its two components under RCTF and reads a plain
     // percentage otherwise, so the mode flipping is what rebuilds it. Written
     // from here as well as from the audio thread, for the reason above: same
     // value either way, and this path still works in a host that is idle.
@@ -1573,7 +1588,7 @@ void SideCrushEditor::paint (juce::Graphics& g)
     g.setColour (uicolour::label);
     g.drawText ("PRE",     juce::Rectangle<int> {  48, 48, 42, 19 }, juce::Justification::centred);
     g.drawText ("CEILING", juce::Rectangle<int> { 164, 48, 77, 19 }, juce::Justification::centred);
-    g.drawText ("OUT",     juce::Rectangle<int> { 966, 48, 42, 19 }, juce::Justification::centred);
+    g.drawText ("OUT",     juce::Rectangle<int> { 878, 48, 42, 19 }, juce::Justification::centred);
 }
 
 void SideCrushEditor::resized()
@@ -1582,8 +1597,10 @@ void SideCrushEditor::resized()
     // given SideCrushLookAndFeel::knobMargin of padding on every side so their
     // drop shadow and the pointer's glow are not clipped by their own bounds.
     preSlider.setBounds    (  48,  83,  42, 192); // track 83..243, readout to 275
-    mixSlider.setBounds    ( 878,  83,  42, 192);
-    outputSlider.setBounds ( 966,  83,  42, 192); // last in the chain, so outermost
+    outputSlider.setBounds ( 878,  83,  42, 192);
+    mixSlider.setBounds    ( 966,  83,  42, 192); // outermost: it is the one with
+                                                  // a switch above it, so it wants
+                                                  // the edge rather than a neighbour
 
     ceilingKnob.setBounds  ( 113,  69, 188, 206); // r 80 at (207,163)
     filterKnob.setBounds   ( 320,  66,  78,  78); // r 25 at (359,105)
@@ -1596,9 +1613,11 @@ void SideCrushEditor::resized()
     filterCaption.setBounds ( 325, 137,  68, 13);
     shapeCaption.setBounds  ( 324, 176,  70, 13);
 
-    // Wider than the design's 42, for the reason the two above are: "RECTI" at
-    // 16pt does not fit the word it replaces. Still centred on the fader.
-    mixCaption.setBounds    ( 859,  48,  80, 19);
+    // Wider than the design's 42, for the reason the two captions above are:
+    // Zalando Sans Expanded puts RCTF over that at 16pt and it comes back
+    // ellipsised. Still centred on the fader, and it has the panel's edge to
+    // grow into now that MIX is the outer of the two.
+    mixCaption.setBounds    ( 954,  48,  66, 19);
 
     slopePill.setBounds    ( 313,  48,  92,  21);
     floorPill.setBounds    ( 313, 257,  92,  21);

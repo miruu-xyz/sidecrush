@@ -483,7 +483,7 @@ void wtfWidthLeavesMonoAndDryAlone()
 //==============================================================================
 // RECTI clips only the half of the carrier the sidechain's polarity points at,
 // and leaves the other one at full amplitude -- SPEC 4.7.
-void rectiClipsOneSideOnly()
+void rctfClipsOneSideOnly()
 {
     for (const auto post : { false, true })
     {
@@ -533,7 +533,7 @@ void rectiClipsOneSideOnly()
 // The top of MIX's travel is the symmetric result exactly, and RECTI switched
 // off is the symmetric result at every point of it -- so nothing that predates
 // this parameter moves.
-void rectiEndpointsAndBypass()
+void rctfEndpointsAndBypass()
 {
     for (const auto clip : { false, true })
     {
@@ -578,7 +578,7 @@ void rectiEndpointsAndBypass()
 // The mono sum still cancels back to exactly the MONO result at 100% WTF
 // intensity, RECTI's asymmetric shape included -- the correction is defined as
 // a difference of sums, so it does not care what shape produced them.
-void rectiSurvivesWtfCancellation()
+void rctfSurvivesWtfCancellation()
 {
     auto p = baseParams();
     p.clip = true;
@@ -626,9 +626,9 @@ int main()
     wtfSplitsBySign();
     wtfIntensityEndpoints();
     wtfWidthLeavesMonoAndDryAlone();
-    rectiClipsOneSideOnly();
-    rectiEndpointsAndBypass();
-    rectiSurvivesWtfCancellation();
+    rctfClipsOneSideOnly();
+    rctfEndpointsAndBypass();
+    rctfSurvivesWtfCancellation();
 
     std::puts ("sidecrush engine: all checks passed");
     return 0;

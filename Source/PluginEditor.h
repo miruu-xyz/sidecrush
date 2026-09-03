@@ -339,7 +339,7 @@ private:
 };
 
 //==============================================================================
-// MIX's midpoint is the whole rectified signal, and under RECTI it is the only
+// MIX's midpoint is the whole rectified signal, and under RCTF it is the only
 // point on the fader with a name rather than a proportion -- so it catches
 // under the cursor. Off, and anywhere but right beside it, the fader is
 // ordinary: this is a detent, not a step.
@@ -418,7 +418,7 @@ private:
     // The FILTER readout relabels itself in POST, and nothing else repaints it.
     bool lastFilterPost = false;
 
-    // MIX's readout names its two components under RECTI and reads a plain
+    // MIX's readout names its two components under RCTF and reads a plain
     // percentage otherwise, so flipping the mode is what rebuilds its text --
     // the same arrangement, for the same reason, as the flag above it.
     bool lastRecti = false;
